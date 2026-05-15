@@ -1,0 +1,16 @@
+{
+  "packageName": "com.arranoust.samehadaku",
+  "name": "Samehadaku",
+  "version": 1,
+  "baseUrl": "https://www.sankavollerei.com",
+  "description": "Samehadaku plugin for SkyStream",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "id"
+  ],
+  "categories": [
+    "Anime"
+  ]
+}
