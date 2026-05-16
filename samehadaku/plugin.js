@@ -199,8 +199,30 @@
         try {
             var base  = manifest.baseUrl;
             var res   = await rateLimitedGet(url);
+            
+            if (!res || !res.body) {
+                cb({ success: false, error: "Respon API kosong atau bermasalah." });
+                return;
+            }
+
             var json  = parseJSON(res);
             var anime = json.data || {};
+
+            // FORCE TO STRING & TRIM: Paksa konversi ke primitif string untuk memutus 
+            // referensi objek async yang mungkin hilang di runtime CloudStream
+            var animeTitle = "";
+            if (anime.title) {
+                animeTitle = String(anime.title).trim();
+            } else if (anime.name) {
+                animeTitle = String(anime.name).trim();
+            }
+
+            // Jika masih kosong karena masalah parsing, ambil potongan URL akhir sebagai penyelamat
+            if (!animeTitle || animeTitle === "undefined" || animeTitle === "") {
+                var urlParts = url.split('/');
+                var slug = urlParts[urlParts.length - 1] || "Anime Detail";
+                animeTitle = slug.replace(/-/g, ' ').toUpperCase();
+            }
 
             var synopsis = (anime.synopsis && anime.synopsis.paragraphs)
                 ? anime.synopsis.paragraphs.join("\n\n")
@@ -208,8 +230,8 @@
 
             var animePoster = String(anime.poster || "");
             var episodeList = anime.episodeList || [];
-
-            var episodes = episodeList.slice().reverse().map(function (ep, index) {
+            
+            var episodes = episodeList.slice().reverse().map(function(ep, index) {
                 var epNum = parseFloat(ep.title) || (index + 1);
                 return new Episode({
                     name:      "Episode " + ep.title,
@@ -222,16 +244,14 @@
             });
 
             var rawStatus = String(anime.status || "").toLowerCase();
-            var status = (rawStatus.includes("complet") || rawStatus.includes("tamat"))
-                ? "completed"
-                : "ongoing";
+            var status = rawStatus.includes("complet") || rawStatus.includes("tamat") ? "completed" : "ongoing";
 
             var score = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
 
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:       String(anime.title || ""),
+                    title:       animeTitle, // <-- Menggunakan string murni yang sudah diamankan
                     url:         url,
                     posterUrl:   animePoster,
                     type:        'anime',
@@ -247,31 +267,26 @@
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // loadStreams — PALING boros request, dioptimasi ketat
-    //
-    // Strategi:
-    //   1. Ambil episode page → 1 request
-    //   2. Iterasi quality, untuk setiap quality coba server satu per satu
-    //      → stop begitu dapat stream valid (early exit per quality)
-    //   3. Stop total setelah kumpulkan MAX_STREAMS stream
-    //   4. Semua via rateLimitedGet (queue + cache)
+    // loadStreams — Dioptimasi Khusus untuk Blogger, Wibufile, & Pixeldrain
+    // Sangat Stabil, Anti-Stuck, & Aman dari Limitasi 50 RPM
     // ─────────────────────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
             var base    = manifest.baseUrl;
-            var res     = await rateLimitedGet(url);
+            var res     = await rateLimitedGet(url); // Request ke-1 (Halaman episode)
             var json    = parseJSON(res);
             var epData  = json.data || {};
             var streams = [];
 
-            var qualities = (epData.server && epData.server.qualities)
+            var serverQualities = (epData.server && epData.server.qualities)
                 ? epData.server.qualities
                 : [];
 
-            outer:
-            for (var qi = 0; qi < qualities.length; qi++) {
-                var q       = qualities[qi];
-                var qTitle  = String(q.title || "").toLowerCase();
+            outerServer:
+            for (var qi = 0; qi < serverQualities.length; qi++) {
+                var q = serverQualities[qi];
+                var qTitle = String(q.title || "").toLowerCase();
+                
                 if (!q.title || qTitle === "unknown") continue;
 
                 var srvList = q.serverList || [];
@@ -282,44 +297,70 @@
 
                     try {
                         var srvUrl  = base + "/anime" + srv.href;
-                        var srvRes  = await rateLimitedGet(srvUrl);
+                        var srvRes  = await rateLimitedGet(srvUrl); // Ambil URL stream (Ikut antrean aman)
                         if (!srvRes) continue;
 
                         var srvJson = parseJSON(srvRes);
                         if (!srvJson.data || !srvJson.data.url) continue;
 
-                        var streamUrl = srvJson.data.url;
+                        var streamUrl  = String(srvJson.data.url).trim();
+                        var serverName = String(srv.title || "").toLowerCase();
+                        var isValidSource = false;
 
-                        // Resolve Blogger embed jika perlu
-                        if (streamUrl.indexOf("blogger.com/video") !== -1) {
-                            var resolved = await resolveBlogger(streamUrl);
-                            if (!resolved) continue;
-                            streamUrl = resolved;
+                        // ── 1. JALUR OPTIMASI: BLOGGER ──
+                        if (streamUrl.indexOf("blogger.com/video") !== -1 || serverName.includes("blogger") || serverName.includes("blogpost")) {
+                            var resolvedBlogger = await resolveBlogger(streamUrl);
+                            if (resolvedBlogger) {
+                                streamUrl = resolvedBlogger;
+                                isValidSource = true;
+                            }
+                        }
+                        
+                        // ── 2. JALUR OPTIMASI: PIXELDRAIN (Instant Rewrite) ──
+                        else if (streamUrl.indexOf("pixeldrain.com/u/") !== -1 || serverName.includes("pixeldrain")) {
+                            streamUrl = streamUrl.replace("pixeldrain.com/u/", "pixeldrain.com/api/file/");
+                            isValidSource = true;
                         }
 
-                        streams.push(new StreamResult({
-                            url:     streamUrl,
-                            source:  String(srv.title || ""),
-                            headers: { "Referer": "https://v2.samehadaku.how/" }
-                        }));
+                        // ── 3. JALUR OPTIMASI: WIBUFILE (Direct Link .mp4) ──
+                        else if (streamUrl.indexOf("wibufile.com") !== -1 || serverName.includes("wibufile")) {
+                            // Wibufile biasanya langsung mengembalikan direct link murni (.mp4)
+                            if (streamUrl.indexOf("http") !== -1) {
+                                isValidSource = true;
+                            }
+                        }
 
-                        // Dapat 1 stream per quality sudah cukup → pindah quality berikutnya
-                        break;
+                        // Jika lolos dari salah satu 3 pilar server di atas, bungkus ke StreamResult
+                        if (isValidSource) {
+                            streams.push(new StreamResult({
+                                url:     streamUrl,
+                                source:  String(srv.title || "Server") + " - " + q.title,
+                                headers: { 
+                                    "Referer": "https://v2.samehadaku.how/",
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                                }
+                            }));
+
+                            // Early Exit: Jika kualitas ini (misal 720p) sudah dapat 1 server valid, 
+                            // langsung lompat ke kualitas berikutnya demi hemat kuota RPM!
+                            break;
+                        }
 
                     } catch (_) {
-                        // Server ini gagal, coba server berikutnya dalam quality yang sama
-                        continue;
+                        continue; // Lewati server yang error, coba alternatif lainnya
                     }
                 }
 
-                // Sudah cukup stream? Berhenti total
-                if (streams.length >= MAX_STREAMS) break outer;
+                // Jika total stream yang dikumpulkan sudah mencukupi target maksimal, hentikan pencarian
+                if (streams.length >= MAX_STREAMS) break outerServer;
             }
 
+            // Validasi hasil akhir
             if (streams.length === 0) {
-                cb({ success: false, error: "Tidak ada stream ditemukan." });
+                cb({ success: false, error: "Tidak ada stream dari Blogger/Wibufile/Pixeldrain yang siap putar." });
                 return;
             }
+
             cb({ success: true, data: streams });
         } catch (e) {
             cb({ success: false, error: String(e) });
