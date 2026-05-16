@@ -1,0 +1,16 @@
+{
+  "packageName": "com.arranoust.otakudesu",
+  "name": "OtakuDesu",
+  "version": 1,
+  "baseUrl": "https://www.sankavollerei.com",
+  "description": "OtakuDesu plugin for SkyStream",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "id"
+  ],
+  "categories": [
+    "Anime"
+  ]
+}
