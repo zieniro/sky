@@ -454,9 +454,10 @@
                 animeTitle   = slug.replace(/-/g, ' ').toUpperCase();
             }
 
-            var synopsis    = (anime.synopsis && anime.synopsis.paragraphs)
+            var synopsis = (anime.synopsis && anime.synopsis.paragraphs)
                 ? anime.synopsis.paragraphs.join("\n\n")
-                : "";
+                : (typeof anime.synopsis === 'string' ? anime.synopsis : '');
+                
             var animePoster = String(anime.poster || "");
             var episodeList = anime.episodeList || [];
 
@@ -481,11 +482,10 @@
                 if (aniListData && aniListData.idMal) {
                     aniZip = await getAniZipByMalId(aniListData.idMal);
                 }
-            } catch (_) {
-            }
+            } catch (_) {}
 
             var cast = [];
-            if (aniListData && aniListData.characters.length > 0) {
+            if (aniListData && aniListData.characters && aniListData.characters.length > 0) {
                 cast = aniListData.characters.map(function (edge) {
                     var node = edge.node;
                     if (!node) return null;
@@ -498,16 +498,16 @@
             }
 
             var episodes = episodeList.slice().reverse().map(function(ep, index) {
-                var epNum = parseFloat(ep.title) || (index + 1);
-
-                var epKeyExact = String(ep.title);
+                var epNum = parseFloat(ep.eps || ep.episode) || (index + 1);
+                var epKeyExact = String(epNum);
                 var epKeyFloor = String(Math.floor(epNum));
+                
                 var aniEp = null;
                 if (aniZip && aniZip.episodes) {
                     aniEp = aniZip.episodes[epKeyExact] || aniZip.episodes[epKeyFloor] || null;
                 }
 
-                var epName = "Episode " + ep.title;
+                var epName = 'Episode ' + (ep.title || ep.episode || (index + 1));
                 if (aniEp && aniEp.title) {
                     epName = aniEp.title.en
                           || aniEp.title['x-jat']
@@ -523,23 +523,21 @@
                 var epRuntime = (aniEp && aniEp.runtime)  ? aniEp.runtime           : undefined;
 
                 return new Episode({
-                    name:      epName,
-                    posterUrl: epPoster,
-                    url:       manifest.baseUrl + ep.href + ep.episodeId,
-                    season:    1,
-                    episode:   epNum,
-                    dubStatus: 'subbed',
+                    name:        epName,
+                    posterUrl:   epPoster,
+                    url:         manifest.baseUrl + ep.href,
+                    season:      1,
+                    episode:     epNum,
+                    dubStatus:   'subbed',
                     description: epDesc,
                     runtime:     epRuntime
                 });
             });
 
-            // Status & Score
             var rawStatus = String(anime.status || '').toLowerCase();
             var status    = rawStatus.includes('complet') || rawStatus.includes('tamat') ? 'completed' : 'ongoing';
             var score     = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
 
-            // Final title: prefer AniZip English title
             var resolvedTitle = animeTitle;
             if (aniZip && aniZip.titles) {
                 resolvedTitle = aniZip.titles.en
