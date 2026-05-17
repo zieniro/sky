@@ -475,7 +475,7 @@
                         if (isValidSource) {
                             streams.push(new StreamResult({
                                 url:     streamUrl,
-                                source:  String(srv.title || "Server") 
+                                source:  String(srv.title || "Server"),
                                 headers: {
                                     "Referer":    "https://v2.samehadaku.how/",
                                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
