@@ -1,0 +1,16 @@
+{
+  "packageName": "com.arranoust.anizone",
+  "name": "AniZone",
+  "version": 1,
+  "baseUrl": "https://anizone.to",
+  "description": "AniZone plugin for SkyStream",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "en"
+  ],
+  "categories": [
+    "Anime"
+  ]
+}
