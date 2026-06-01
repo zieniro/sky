@@ -33,7 +33,8 @@
         } catch (_) { return []; }
     }
 
-    // ─── Regex-based HTML parser 
+    // ─── Regex-based HTML parser ─────────────
+
     function parseLatestEpisodes(html) {
         var items = [];
         var liRegex = /<li[^>]*x-data[^>]*>[\s\S]*?<\/li>/gi;
@@ -61,7 +62,7 @@
             var epTitleMatch = li.match(/href="https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/\d+"[^>]*title="([^"]+)"/i);
             var epTitle = epTitleMatch ? epTitleMatch[1].trim() : '';
 
-            // Anime page URL
+            // Anime page URL (without episode number)
             var animeUrlMatch = epUrl.match(/^(https?:\/\/anizone\.to\/anime\/[a-z0-9]+)\/\d+$/i);
             var animeUrl = animeUrlMatch ? animeUrlMatch[1] : '';
 
@@ -87,18 +88,19 @@
             var html = getBody(await http_get(base, HTML_HEADERS));
             if (!html) return cb({ success: false, error: 'Gagal memuat HTML.' });
 
-            // ── 1. Latest Episodes
+            // ── 1. Latest Episodes ──
             var epItems = parseLatestEpisodes(html);
             var latestEpisodes = epItems.map(function(ep) {
                 return new MultimediaItem({
-                    title:     ep.animeTitle + (ep.epTitle ? ' - ' + ep.epTitle : ''),
-                    url:       ep.epUrl,
-                    posterUrl: ep.thumbnail,
-                    type:      'anime'
+                    title:       ep.animeTitle + (ep.epTitle ? ' - ' + ep.epTitle : ''),
+                    url:         ep.animeUrl || ep.epUrl,
+                    posterUrl:   ep.thumbnail,   
+                    type:        'anime',
+                    description: 'No description available.'
                 });
             });
 
-            // ── 2. Latest Anime (swiper carousel) ──
+            // ── 2. Latest Anime ──
             var links   = await parseHtml(html, '.swiper-wrapper .swiper-slide .line-clamp-2 a', 'href');
             var titles  = await parseHtml(html, '.swiper-wrapper .swiper-slide .line-clamp-2 a', 'text');
             var posters = await parseHtml(html, '.swiper-wrapper .swiper-slide img', 'src');
@@ -172,18 +174,34 @@
 
             var animeTitle = titles[0] ? titles[0].trim() : 'No Title';
             var poster     = posters[0] || '';
-            var synopsis   = descriptions[0] ? descriptions[0].trim() : '';
+            var synopsis   = (descriptions[0] && descriptions[0].trim()) ? descriptions[0].trim() : 'No description available.';
             var isOngoing  = /ongoing/i.test(html);
 
+            // ── Parse episodes with per-episode thumbnails ──
             var episodeItems = [];
-            
-            var epRegex = /<a[^>]+wire:key="e-(\d+)"[^>]+href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"[^>]*>[\s\S]*?<div[^>]+min-w-10[^>]*>[\s\S]*?<\/div>[\s\S]*?<div[^>]+grow[^>]*>([^<]*)<\/div>/gi;
-            var match;
-            while ((match = epRegex.exec(html)) !== null) {
-                var epNum   = parseInt(match[1], 10);
-                var epUrl   = match[2];
-                var epName  = match[4] ? match[4].trim() : ('Episode ' + match[3]);
-                if (!epName || epName === 'Untitled') epName = 'Episode ' + match[3];
+            var liBlocks = html.match(/<li[^>]*x-data[^>]*>[\s\S]*?<\/li>/gi) || [];
+
+            for (var li = 0; li < liBlocks.length; li++) {
+                var block = liBlocks[li];
+
+                var epUrlMatch = block.match(/href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"/i);
+                if (!epUrlMatch) continue;
+                var epUrl = epUrlMatch[1];
+                var epNum = parseInt(epUrlMatch[2], 10);
+
+                // Episode thumbnail
+                var thumbMatch = block.match(/src="(https?:\/\/[^"]+snapshot\.webp)"/i)
+                              || block.match(/src="(https?:\/\/[^"]+\.webp)"/i);
+                var epThumb = thumbMatch ? thumbMatch[1] : poster;
+
+                // Episode title 
+                var h3Match = block.match(/<h3[^>]*>\s*([^<]+?)\s*<\/h3>/i);
+                var epName  = h3Match ? h3Match[1].trim() : ('Episode ' + epNum);
+                if (!epName || epName === 'Untitled') epName = 'Episode ' + epNum;
+
+                // Air date
+                var dateMatch = block.match(/(\d{4}-\d{2}-\d{2})/);
+                var airDate   = dateMatch ? dateMatch[1] : '';
 
                 episodeItems.push(new Episode({
                     name:      epName,
@@ -191,7 +209,8 @@
                     season:    1,
                     episode:   epNum,
                     dubStatus: 'subbed',
-                    posterUrl: poster,
+                    posterUrl: epThumb,
+                    airDate:   airDate,
                     runtime:   0
                 }));
             }
@@ -199,9 +218,10 @@
             if (episodeItems.length === 0) {
                 var epUrlRegex = /href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"/gi;
                 var seen = {};
+                var match;
                 while ((match = epUrlRegex.exec(html)) !== null) {
-                    var epUrl  = match[1];
-                    var epNum  = parseInt(match[2], 10);
+                    var epUrl = match[1];
+                    var epNum = parseInt(match[2], 10);
                     if (seen[epUrl]) continue;
                     seen[epUrl] = true;
                     episodeItems.push(new Episode({
@@ -216,6 +236,7 @@
                 }
             }
 
+            // Sort episodes ascending by episode number
             episodeItems.sort(function(a, b) { return a.episode - b.episode; });
 
             cb({
