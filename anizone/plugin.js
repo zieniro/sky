@@ -1,212 +1,244 @@
 (function () {
 
-    // ─── Constants & Headers ──────────────────────────────────────────────────
-    var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-    var HTML_HEADERS = {
-        'User-Agent': UA,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    // ─── Constants ────────────────────────────────────────────────────────────
+    const HEADERS = {
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5'
-    };
-
-    var manifest = {
-        baseUrl: "https://anizone.to"
     };
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
     function getBody(res) {
-        if (!res) return '';
-        if (typeof res === 'string') return res;
-        if (res.body) return typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
+        if (!res)                         return '';
+        if (typeof res === 'string')      return res;
+        if (typeof res.body === 'string') return res.body;
+        if (res.body)                     return JSON.stringify(res.body);
         return String(res);
     }
 
-    async function parseHtml(html, selector, attrType) {
+    async function $$(html, selector, attr) {
         try {
-            var raw = await parse_html(html, selector, attrType);
+            const raw = await parse_html(html, selector, attr);
             if (!Array.isArray(raw)) return [];
-            return raw.map(function (item) {
-                if (!item) return '';
+            return raw.map(item => {
+                if (!item)                    return '';
                 if (typeof item === 'string') return item;
-                if (attrType === 'text') return item.text || '';
-                return item.attr || item[attrType] || '';
+                if (attr === 'text')          return item.text  || '';
+                return item.attr || item[attr] || '';
             });
         } catch (_) { return []; }
     }
 
-    // ─── Core Methods ─────────────────────────────────────────────────────────
+    function url(href) {
+        if (!href) return '';
+        return href.startsWith('http') ? href : manifest.baseUrl + href;
+    }
 
-    // Home
+    async function fetchHtml(pageUrl) {
+        const body = getBody(await http_get(pageUrl, HEADERS));
+        if (!body) throw new Error('Empty response from ' + pageUrl);
+        return body;
+    }
+
+    // ─── getHome ──────────────────────────────────────────────────────────────
     async function getHome(cb) {
         try {
-            var base = manifest.baseUrl;
-            var html = getBody(await http_get(base, HTML_HEADERS));
-            if (!html) return cb({ success: false, error: 'Gagal memuat HTML.' });
+            const base = manifest.baseUrl;
+            const html = await fetchHtml(base);
 
-            var links   = await parseHtml(html, '.swiper-wrapper .swiper-slide .line-clamp-2 a', 'href');
-            var titles  = await parseHtml(html, '.swiper-wrapper .swiper-slide .line-clamp-2 a', 'text');
-            var posters = await parseHtml(html, '.swiper-wrapper .swiper-slide img', 'src');
+            const [
+                animeHrefs, animeTitles, animePosters,
+                epHrefs, epTitles, epThumbs, epDates
+            ] = await Promise.all([
+                $$(html, '.swiper-slide .line-clamp-2 a',            'href'),
+                $$(html, '.swiper-slide .line-clamp-2 a',            'text'),
+                $$(html, '.swiper-slide img',                         'src'),
+                $$(html, 'ul li a[wire\\:navigate][href*="/anime/"]', 'href'),
+                $$(html, 'ul li a[wire\\:navigate][href*="/anime/"]', 'text'),
+                $$(html, 'ul li a.group img',                         'src'),
+                $$(html, 'ul li .flex-row span span',                 'text'),
+            ]);
 
-            var animeItems = [];
-            var totalItems = Math.min(links.length, titles.length, posters.length);
-
-            for (var i = 0; i < totalItems; i++) {
-                var href = links[i];
-                if (!href) continue;
+            const animeItems = [];
+            const animeCount = Math.min(animeHrefs.length, animeTitles.length, animePosters.length);
+            for (let i = 0; i < animeCount; i++) {
+                if (!animeHrefs[i]) continue;
                 animeItems.push(new MultimediaItem({
-                    title:     (titles[i] || 'No Title').trim(),
-                    url:       href.startsWith('http') ? href : base + href,
-                    posterUrl: posters[i] || '',
+                    title:     (animeTitles[i] || 'No Title').trim(),
+                    url:       url(animeHrefs[i]),
+                    posterUrl: animePosters[i] || '',
                     type:      'anime'
                 }));
             }
 
-            var result = {};
-            if (animeItems.length > 0) result['Latest Anime'] = animeItems;
+            // Latest Episodes
+            const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+            const epItems = [];
+            for (let j = 0; j + 1 < epHrefs.length; j += 2) {
+                const epHref = epHrefs[j + 1];
+                if (!epHref || !/\/anime\/[^/]+\/\w+/.test(epHref)) continue;
+
+                const idx     = j / 2;
+                const epTitle = (epTitles[j + 1] || '').trim();
+                const airDate = (epDates[idx] || '').trim();
+
+                epItems.push(new MultimediaItem({
+                    title:       (epTitles[j] || 'No Title').trim() + (epTitle ? ' — ' + epTitle : ''),
+                    url:         url(epHrefs[j]),
+                    posterUrl:   epThumbs[idx] || '',
+                    type:        'anime',
+                    description: DATE_RE.test(airDate) ? 'Aired: ' + airDate : 'No description available.'
+                }));
+            }
+
+            const result = {};
+            if (animeItems.length) result['Trending']        = animeItems;
+            if (animeItems.length) result['Latest Anime']    = animeItems;
+            if (epItems.length)    result['Latest Episodes'] = epItems;
+
+            if (!Object.keys(result).length)
+                return cb({ success: false, error: 'No data found on homepage.' });
+
             cb({ success: true, data: result });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // Search
+    // ─── search ───────────────────────────────────────────────────────────────
     async function search(query, cb) {
-        var base = manifest.baseUrl;
-        var searchUrl = base + '/anime?search=' + encodeURIComponent(query);
-
         try {
-            var html = getBody(await http_get(searchUrl, HTML_HEADERS));
-            if (!html) return cb({ success: false, error: 'Gagal memuat HTML pencarian.' });
+            const base = manifest.baseUrl;
+            const html = await fetchHtml(base + '/anime?search=' + encodeURIComponent(query));
 
-            var titles  = await parseHtml(html, '.grid a[href*="/anime/"]', 'text');
-            var urls    = await parseHtml(html, '.grid a[href*="/anime/"]', 'href');
-            var posters = await parseHtml(html, '.grid img', 'src');
+            const [titles, hrefs, posters] = await Promise.all([
+                $$(html, '.grid a[href*="/anime/"]', 'text'),
+                $$(html, '.grid a[href*="/anime/"]', 'href'),
+                $$(html, '.grid img',                'src'),
+            ]);
 
-            var results = [];
-            var totalItems = Math.min(titles.length, urls.length);
-
-            for (var i = 0; i < totalItems; i++) {
-                var href = urls[i];
-                if (!href) continue;
+            const results = [];
+            for (let i = 0; i < Math.min(titles.length, hrefs.length); i++) {
+                if (!hrefs[i]) continue;
                 results.push(new MultimediaItem({
                     title:     (titles[i] || 'No Title').trim(),
-                    url:       href.startsWith('http') ? href : base + href,
+                    url:       url(hrefs[i]),
                     posterUrl: posters[i] || '',
                     type:      'anime'
                 }));
             }
 
             cb({ success: true, data: results });
-        } catch (e) {
-            console.error('Error saat melakukan search:', e);
-            cb({ success: false, error: String(e) });
-        }
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // Load (detail anime + daftar episode)
-    async function load(url, cb) {
-        var base = manifest.baseUrl;
-
+    // ─── load ─────────────────────────────────────────────────────────────────
+    async function load(pageUrl, cb) {
         try {
-            var html = getBody(await http_get(url, HTML_HEADERS));
-            if (!html) return cb({ success: false, error: 'Gagal memuat HTML detail anime.' });
+            const html   = await fetchHtml(pageUrl);
+            const EP_SEL = 'ul li a[wire\\:navigate][href*="/anime/"]';
+            const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-            var titles       = await parseHtml(html, 'h1', 'text');
-            var posters      = await parseHtml(html, 'img[src*="/images/anime/"]', 'src');
-            var descriptions = await parseHtml(html, '.text-slate-100.text-center div', 'text');
+            const [
+                titles, posters, descriptions, years,
+                epHrefs, epTitles, epAllMeta, epThumbs
+            ] = await Promise.all([
+                $$(html, 'h1',                                         'text'),
+                $$(html, 'img[src*="/images/anime/"]',                 'src'),
+                $$(html, '.text-slate-100.text-center div',            'text'),
+                $$(html, '.flex.flex-wrap span span',                  'text'),
+                $$(html, EP_SEL,                                       'href'),
+                $$(html, EP_SEL + ' h3',                               'text'),
+                $$(html, EP_SEL + ' .flex-row span span.line-clamp-1', 'text'),
+                $$(html, EP_SEL + ' div img',                          'src'),
+            ]);
 
-            var animeTitle = titles[0] ? titles[0].trim() : 'No Title';
-            var poster     = posters[0] || '';
-            var synopsis   = descriptions[0] ? descriptions[0].trim() : '';
-            var isOngoing  = /ongoing/i.test(html);
+            const poster    = posters[0] || '';
+            const synopsis  = (descriptions[0] || '').trim();
+            const isOngoing = /ongoing/i.test(html);
 
-            var epUrls         = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"]', 'href');
-            var epTitles       = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] h3', 'text');
-            var epDescriptions = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] span.text-slate-100.text-sm', 'text');
-            var epAirDates     = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] .flex-row span:nth-child(2) span.line-clamp-1', 'text');
-            var epThumbnails = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] img', 'src');
+            const yearStr = years.find(s => /^\d{4}$/.test((s || '').trim())) || '';
+            const year    = yearStr ? parseInt(yearStr, 10) : undefined;
 
-            var episodeItems = [];
-            var totalEpisodes = Math.min(epUrls.length, epTitles.length);
+            const epDates = epHrefs.map((_, i) => {
+                const chunk = epAllMeta.slice(i * 3, i * 3 + 3);
+                return chunk.find(s => DATE_RE.test((s || '').trim())) || '';
+            });
 
-            for (var i = 0; i < totalEpisodes; i++) {
-                var epHref = epUrls[i];
-                if (!epHref) continue;
+            const validEps = epHrefs
+                .map((href, i) => ({
+                    href,
+                    title: epTitles[i] || '',
+                    date:  epDates[i]  || '',
+                    thumb: epThumbs[i] || ''
+                }))
+                .filter(ep => /\/anime\/[^/]+\/\w+$/.test(ep.href));
 
-                var epSlug     = epHref.split('/').pop() || '';
-                var rawEpTitle = epTitles[i] || '';
-                // Ekstrak angka dari slug: "1"→1, "s1"→1, "ova2"→2, ""→i+1
-                var epNum      = parseFloat(epSlug.replace(/[^0-9.]/g, '')) || (i + 1);
+            const episodes = validEps.map((ep, i) => {
+                const slug  = ep.href.split('/').pop() || '';
+                const epNum = parseFloat(slug.replace(/[^0-9.]/g, '')) || (i + 1);
 
-                episodeItems.push(new Episode({
-                    name:        rawEpTitle.trim() || ('Episode ' + epSlug),
-                    url:         epHref.startsWith('http') ? epHref : base + epHref,
-                    season:      1,
-                    episode:     epNum,
-                    dubStatus:   'subbed',
-                    description: epDescriptions[i] ? epDescriptions[i].trim() : '',
-                    airDate:     epAirDates[i] ? epAirDates[i].trim() : '',
-                    posterUrl:   epThumbnails[i] || poster,
-                    runtime:     0
-                }));
-            }
+                return new Episode({
+                    name:      ep.title.trim() || ('Episode ' + slug),
+                    url:       url(ep.href),
+                    season:    1,
+                    episode:   epNum,
+                    dubStatus: 'subbed',
+                    airDate:   ep.date.trim(),
+                    posterUrl: ep.thumb || poster,
+                });
+            });
 
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:       animeTitle,
-                    url:         url,
+                    title:       (titles[0] || 'No Title').trim(),
+                    url:         pageUrl,
                     posterUrl:   poster,
                     type:        'anime',
+                    year,
                     status:      isOngoing ? 'ongoing' : 'completed',
-                    description: synopsis,
-                    episodes:    episodeItems
+                    description: synopsis || 'No description available.',
+                    episodes,
                 })
             });
-
-        } catch (e) {
-            console.error('Error saat melakukan load detail:', e);
-            cb({ success: false, error: String(e) });
-        }
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // Load Streams
-    async function loadStreams(url, cb) {
+    // ─── loadStreams ───────────────────────────────────────────────────────────
+    async function loadStreams(pageUrl, cb) {
         try {
-            var html = getBody(await http_get(url, HTML_HEADERS));
-            if (!html) return cb({ success: false, error: 'Gagal memuat HTML episode.' });
+            const html = await fetchHtml(pageUrl);
 
-            var streamUrls = await parseHtml(html, 'media-player[src]', 'src');
-            var m3u8Url = streamUrls[0];
-            if (!m3u8Url) return cb({ success: false, error: 'Stream tidak ditemukan.' });
+            const [streamUrls, subSrcs, subLabels, subLangs] = await Promise.all([
+                $$(html, 'media-player[src]',       'src'),
+                $$(html, 'track[kind="subtitles"]', 'src'),
+                $$(html, 'track[kind="subtitles"]', 'label'),
+                $$(html, 'track[kind="subtitles"]', 'srclang'),
+            ]);
 
-            var subSrcs   = await parseHtml(html, 'track[kind="subtitles"]', 'src');
-            var subLabels = await parseHtml(html, 'track[kind="subtitles"]', 'label');
-            var subLangs  = await parseHtml(html, 'track[kind="subtitles"]', 'srclang');
+            const m3u8 = streamUrls[0];
+            if (!m3u8) return cb({ success: false, error: 'Stream not found.' });
 
-            var subtitles = [];
-            for (var i = 0; i < subSrcs.length; i++) {
-                if (!subSrcs[i]) continue;
-                subtitles.push({
-                    url:   subSrcs[i],
-                    label: subLabels[i] || ('Sub ' + i),
+            const subtitles = subSrcs
+                .map((src, i) => src ? {
+                    url:   src,
+                    label: subLabels[i] || 'Sub ' + i,
                     lang:  subLangs[i]  || 'und'
-                });
-            }
+                } : null)
+                .filter(Boolean);
 
-            var stream = new StreamResult({
-                url:       m3u8Url,
-                quality:   'Multi Quality',
-                headers:   { 'Referer': manifest.baseUrl + '/' },
-                subtitles: subtitles
+            cb({
+                success: true,
+                data: [new StreamResult({
+                    url:       m3u8,
+                    quality:   'Multi Quality',
+                    headers:   { 'Referer': manifest.baseUrl + '/' },
+                    subtitles,
+                })]
             });
-
-            cb({ success: true, data: [stream] });
-
-        } catch (e) {
-            console.error('Error loadStreams:', e);
-            cb({ success: false, error: String(e) });
-        }
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─── Expose to Global Scope ───────────────────────────────────────────────
+    // ─── Expose ───────────────────────────────────────────────────────────────
     globalThis.getHome    = getHome;
     globalThis.search     = search;
     globalThis.load       = load;
