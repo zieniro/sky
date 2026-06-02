@@ -192,24 +192,25 @@
     // ─── search ───────────────────────────────────────────────────────────────
     async function search(query, cb) {
         try {
-            var html   = getBody(await http_get(BASE_URL + '/?s=' + encodeURIComponent(query), HTML_HDR));
-            var hrefs  = await parseHtml(html, 'article figure a', 'href');
-            var imgs   = await parseHtml(html, 'article figure img', 'src');
-            var titles = await parseHtml(html, 'article figure h3', 'text');
+            var res  = await http_get(
+                'https://gudangvape.com/search.php?s=' + encodeURIComponent(query) + '&page=1',
+                { ...JSON_HDR, 'Referer': BASE_URL + '/' }
+            );
+            var root = JSON.parse(getBody(res));
+            var arr  = root.data || [];
 
-            var items = [];
-            for (var i = 0; i < hrefs.length; i++) {
-                var href  = hrefs[i];
-                var title = cleanTitle((titles[i] || '').trim());
-                if (!href || !title) continue;
-                var fullUrl = href.startsWith('http') ? href : BASE_URL + href;
-                items.push(new MultimediaItem({
-                    title:     title,
-                    url:       fullUrl,
-                    posterUrl: imgs[i] || '',
-                    type:      'series'
-                }));
-            }
+            var items = arr.map(function(item) {
+                var type = item.type === 'series' ? 'series' : 'movie';
+                var url  = type === 'series'
+                    ? (SERIES_URL + '/' + item.slug)
+                    : (BASE_URL   + '/' + item.slug);
+                return new MultimediaItem({
+                    title:     cleanTitle(item.title || ''),
+                    url:       url,
+                    posterUrl: item.poster ? (POSTER_CDN + item.poster) : '',
+                    type:      type
+                });
+            }).filter(function(i) { return i.title; });
 
             cb({ success: true, data: items });
         } catch (e) { cb({ success: false, error: String(e) }); }
