@@ -7,6 +7,18 @@
     var ANI_ZIP     = 'https://api.ani.zip/mappings';
     var MEDIA_LIMIT = 20;
 
+    // Best public trackers (static fallback)
+    var TRACKERS = [
+        'udp://tracker.opentrackr.org:1337/announce',
+        'udp://open.stealth.si:80/announce',
+        'udp://tracker.torrent.eu.org:451/announce',
+        'udp://tracker.bittor.pw:1337/announce',
+        'udp://public.popcorn-tracker.org:6969/announce',
+        'udp://tracker.dler.org:6969/announce',
+        'udp://exodus.desync.com:6969',
+        'udp://open.demonii.com:1337/announce'
+    ];
+
     var HTML_HEADERS = {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         'Accept':     'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
@@ -51,7 +63,8 @@
     }
 
     function buildMagnet(hash, name) {
-        return 'magnet:?xt=urn:btih:' + hash + '&dn=' + encodeURIComponent(name || hash);
+        var trackerParams = TRACKERS.map(function(t) { return '&tr=' + encodeURIComponent(t); }).join('');
+        return 'magnet:?xt=urn:btih:' + hash + '&dn=' + encodeURIComponent(name || hash) + trackerParams;
     }
 
     function getQuality(title) {
@@ -264,16 +277,35 @@
             if (!res || !res.streams || !res.streams.length)
                 return cb({ success: false, error: 'Tidak ada stream ditemukan.' });
 
-            var streams = res.streams.filter(function(s) { return !!s.infoHash; }).map(function(s) {
-                return new StreamResult({
-                    url:     buildMagnet(s.infoHash, s.name),
-                    quality: getQuality(s.title || ''),
-                    name:    buildMagnetLabel(s.title || '', 'Torrentio'),
-                    headers: {}
-                });
+            var streams = [];
+            res.streams.forEach(function(s) {
+                // stream.name = server label e.g. "Torrentio\n👤 50 💾 1.4 GB ⚙️ 1337x"
+                var serverName = (s.name || 'Torrentio').split('\n')[0].trim();
+                var label      = buildMagnetLabel(s.title || '', serverName);
+                var quality    = getQuality(s.title || s.name || '');
+
+                if (s.infoHash) {
+                    // Free magnet stream
+                    streams.push(new StreamResult({
+                        url:     buildMagnet(s.infoHash, s.name),
+                        quality: quality,
+                        source:  serverName,
+                        name:    label,
+                        headers: {}
+                    }));
+                } else if (s.url) {
+                    // Debrid / direct stream
+                    streams.push(new StreamResult({
+                        url:     s.url,
+                        quality: quality,
+                        source:  serverName,
+                        name:    label,
+                        headers: {}
+                    }));
+                }
             });
 
-            if (!streams.length) return cb({ success: false, error: 'Tidak ada magnet link tersedia.' });
+            if (!streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
             cb({ success: true, data: streams });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -433,16 +465,32 @@
             if (!res || !res.streams || !res.streams.length)
                 return cb({ success: false, error: 'Tidak ada stream ditemukan.' });
 
-            var streams = res.streams.filter(function(s) { return !!s.infoHash; }).map(function(s) {
-                return new StreamResult({
-                    url:     buildMagnet(s.infoHash, s.name),
-                    quality: getQuality(s.title || ''),
-                    name:    buildMagnetLabel(s.title || '', 'Torrentio Anime'),
-                    headers: {}
-                });
+            var streams = [];
+            res.streams.forEach(function(s) {
+                var serverName = (s.name || 'Torrentio').split('\n')[0].trim();
+                var label      = buildMagnetLabel(s.title || '', serverName);
+                var quality    = getQuality(s.title || s.name || '');
+
+                if (s.infoHash) {
+                    streams.push(new StreamResult({
+                        url:     buildMagnet(s.infoHash, s.name),
+                        quality: quality,
+                        source:  serverName,
+                        name:    label,
+                        headers: {}
+                    }));
+                } else if (s.url) {
+                    streams.push(new StreamResult({
+                        url:     s.url,
+                        quality: quality,
+                        source:  serverName,
+                        name:    label,
+                        headers: {}
+                    }));
+                }
             });
 
-            if (!streams.length) return cb({ success: false, error: 'Tidak ada magnet link tersedia.' });
+            if (!streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
             cb({ success: true, data: streams });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
