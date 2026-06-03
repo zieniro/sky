@@ -6,7 +6,7 @@
   "domains": [
     { "name": "anizone.to", "url": "https://anizone.to" }
   ],
-  "description": "AniZone plugin for SkyStream",
+  "description": "AniZone - Anime Streaming with Multi-Language Softsubs",
   "authors": [
     "arranoust"
   ],
