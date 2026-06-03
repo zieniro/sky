@@ -1,0 +1,22 @@
+{
+  "packageName": "com.arranoust.torrentio",
+  "name": "Torrentio",
+  "version": 1,
+  "baseUrl": "https://torrentio.strem.fun",
+  "description": "Torrentio - Movies, Series & Anime via Torrent",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "en"
+  ],
+  "categories": [
+    "Movies",
+    "Series",
+    "Anime"
+  ],
+  "providers": [
+    { "id": "Torrentio",      "name": "Torrentio",       "baseUrl": "https://torrentio.strem.fun" },
+    { "id": "TorrentioAnime", "name": "Torrentio Anime", "baseUrl": "https://torrentio.strem.fun/providers=nyaasi,tokyotosho,anidex%7Csort=seeders" }
+  ]
+}
