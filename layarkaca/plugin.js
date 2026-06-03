@@ -3,7 +3,7 @@
     // ─── Constants ────────────────────────────────────────────────────────────
     var BASE_URL   = manifest.baseUrl;
     var SERIES_URL = 'https://series.lk21.de';
-    var POSTER_CDN = 'https://static-jpg.lk21.party/wp-content/uploads/';
+    var POSTER_CDN = 'https://poster.showcdnx.com/wp-content/uploads/';
     var UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     var HTML_HDR   = { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' };
     var JSON_HDR   = { 'User-Agent': UA, 'Accept': 'application/json' };
@@ -190,22 +190,40 @@
     }
 
     // ─── search ───────────────────────────────────────────────────────────────
+    async function getSearchDomain() {
+        try {
+            var html  = getBody(await http_get(BASE_URL, HTML_HDR));
+            var match = html.match(/["'](https?:\/\/tv\d+\.lk21official\.cc)["']/i);
+            if (match) return match[1];
+        } catch (_) {}
+        return 'https://tv10.lk21official.cc';
+    }
+
     async function search(query, cb) {
         try {
+            var searchDomain = await getSearchDomain();
             var res  = await http_get(
                 'https://gudangvape.com/search.php?s=' + encodeURIComponent(query) + '&page=1',
-                { ...JSON_HDR, 'Referer': BASE_URL + '/' }
+                {
+                    'User-Agent':       UA,
+                    'Accept':           '*/*',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Origin':           searchDomain,
+                    'Referer':          searchDomain + '/'
+                }
             );
-            var root = JSON.parse(getBody(res));
-            var arr  = root.data || [];
+            var body = getBody(res);
+            var root = JSON.parse(body);
+            var arr  = root.data || root.items || [];
 
             var items = arr.map(function(item) {
-                var type = item.type === 'series' ? 'series' : 'movie';
-                var url  = type === 'series'
+                var type     = item.type === 'series' ? 'series' : 'movie';
+                var url      = type === 'series'
                     ? (SERIES_URL + '/' + item.slug)
                     : (BASE_URL   + '/' + item.slug);
+                var rawTitle = (item.title || '').replace(/\(\d{4}\)$/, '').trim();
                 return new MultimediaItem({
-                    title:     cleanTitle(item.title || ''),
+                    title:     cleanTitle(rawTitle),
                     url:       url,
                     posterUrl: item.poster ? (POSTER_CDN + item.poster) : '',
                     type:      type
