@@ -7,6 +7,7 @@
     var UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     var HTML_HDR   = { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' };
     var JSON_HDR   = { 'User-Agent': UA, 'Accept': 'application/json' };
+    var PLAYER_HDR = { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8', 'Referer': 'https://playeriframe.sbs/' };
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
     function getBody(res) {
@@ -30,10 +31,8 @@
     }
 
     function getBaseUrl(url) {
-        try {
-            var u = new URL(url);
-            return u.protocol + '//' + u.host;
-        } catch (_) { return ''; }
+        try { var u = new URL(url); return u.protocol + '//' + u.host; }
+        catch (_) { return ''; }
     }
 
     function cleanTitle(raw) {
@@ -45,99 +44,119 @@
             .trim();
     }
 
+    function extractQuality(url) {
+        var m = (url || '').match(/[/_](\d{3,4}p?)\.m3u8/i)
+             || (url || '').match(/[/_](2160|1080|720|480|360|240)(?:[^0-9]|$)/i);
+        return m ? m[1].replace(/p?$/, '') + 'p' : '';
+    }
+
+    function unpackIfNeeded(html) {
+        if (!html.includes('eval(function(p,a,c,k,e')) return html;
+        try { return getAndUnpack(html); } catch (_) { return html; }
+    }
+
+    function extractM3u8(src) {
+        return (src.match(/["'](https?:\/\/[^"']+\.m3u8[^"']{0,400}?)["']/i)
+             || src.match(/file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i)
+             || src.match(/source\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i)
+             || [null, null])[1];
+    }
+
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
-    async function resolveHownetwork(embedUrl) {
+    // P2P — playeriframe.sbs/iframe/p2p/{token} → cloud.hownetwork.xyz/video.php?id={token}
+    async function resolveP2P(wrapperUrl) {
         try {
-            var id  = embedUrl.split('id=')[1] || '';
-            var res = await http_post(
-                getBaseUrl(embedUrl) + '/api.php?id=' + id,
-                {
-                    'User-Agent':       UA,
-                    'Referer':          embedUrl,
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Content-Type':     'application/x-www-form-urlencoded'
-                },
-                'r=&d=' + encodeURIComponent(getBaseUrl(embedUrl))
-            );
+            var wrapHtml = getBody(await http_get(wrapperUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
+            var iframeSrc = (wrapHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i) || [])[1];
+            if (!iframeSrc) return null;
+
+            // iframeSrc = https://cloud.hownetwork.xyz/video.php?id={token}
+            var token = (iframeSrc.match(/[?&]id=([^&]+)/) || [])[1] || '';
+            if (!token) return null;
+
+            var apiUrl = 'https://cloud.hownetwork.xyz/api2.php?id=' + encodeURIComponent(token);
+            var res = await http_post(apiUrl, {
+                'User-Agent':       UA,
+                'Referer':          'https://cloud.hownetwork.xyz/',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Content-Type':     'application/x-www-form-urlencoded',
+                'Origin':           'https://cloud.hownetwork.xyz'
+            }, 'r=&d=https%3A%2F%2Fcloud.hownetwork.xyz');
             var json = JSON.parse(getBody(res));
-            var file = json.file || null;
+            var file = json.file || json.url || null;
             if (!file) return null;
+
+            var q = extractQuality(file) || 'P2P';
             return new StreamResult({
                 url:     file,
-                quality: 'Multi Quality',
-                headers: { 'Referer': embedUrl }
+                quality: q,
+                source:  'P2P | ' + q,
+                headers: { 'Referer': 'https://cloud.hownetwork.xyz/' }
             });
         } catch (_) { return null; }
     }
 
-    async function resolveFilesim(embedUrl) {
+    // TurboVIP — playeriframe.sbs/iframe/turbovip/{id} → emturbovid.com or turbovidhls
+    async function resolveTurboVip(wrapperUrl) {
         try {
-            var html = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': getBaseUrl(embedUrl) + '/' }));
-            var src  = html;
-            if (html.includes('eval(function(p,a,c,k,e')) {
-                try { src = getAndUnpack(html); } catch (_) {}
-            }
+            var wrapHtml = getBody(await http_get(wrapperUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
+            var iframeSrc = (wrapHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i) || [])[1];
+            if (!iframeSrc) return null;
 
-            var arr = src.match(/sources\s*:\s*\[([^\]]+)\]/i);
-            if (arr) {
-                var results      = [];
-                var fileMatches  = arr[1].matchAll(/file\s*:\s*["']([^"']+)["'][^}]*(?:label\s*:\s*["']([^"']*)["'])?/gi);
-                for (var m of fileMatches) {
-                    if (!m[1]) continue;
-                    results.push(new StreamResult({
-                        url:     m[1],
-                        quality: m[2] || 'Auto',
-                        headers: { 'Referer': embedUrl }
-                    }));
-                }
-                if (results.length) return results;
-            }
+            var innerHtml = getBody(await http_get(iframeSrc, PLAYER_HDR));
+            var src = unpackIfNeeded(innerHtml);
+            var m3u8 = extractM3u8(src);
+            if (!m3u8) return null;
 
-            var single = src.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i)
-                || src.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (single && single[1]) {
-                return [new StreamResult({
-                    url:     single[1],
-                    quality: 'Auto',
-                    headers: { 'Referer': embedUrl }
-                })];
-            }
-
-            return null;
+            var q = extractQuality(m3u8) || 'Auto';
+            return new StreamResult({
+                url:     m3u8,
+                quality: q,
+                source:  'TurboVIP | ' + q,
+                headers: { 'Referer': getBaseUrl(iframeSrc) + '/', 'Origin': getBaseUrl(iframeSrc) }
+            });
         } catch (_) { return null; }
     }
 
-    async function resolveVidhide(embedUrl) {
+    // Cast — playeriframe.sbs/iframe/cast/{id} → sb1254w9megshle.org/e/{id}
+    async function resolveCast(wrapperUrl) {
         try {
-            var html = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
-            var src  = html;
-            if (html.includes('eval(function(p,a,c,k,e')) {
-                try { src = getAndUnpack(html); } catch (_) {}
-            }
-            var m = src.match(/["'](https?:\/\/[^"']+\/api\/server[^"']*)["']/i)
-                 || src.match(/file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i);
-            if (!m) return null;
+            var wrapHtml = getBody(await http_get(wrapperUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
+            var iframeSrc = (wrapHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i) || [])[1];
+            if (!iframeSrc) return null;
 
-            if (m[1].includes('/api/server')) {
-                var apiRes  = await http_get(m[1], { ...JSON_HDR, 'Referer': embedUrl });
-                var apiJson = JSON.parse(getBody(apiRes));
-                var file    = apiJson.url || apiJson.file || apiJson.src;
-                if (!file) return null;
-                return [new StreamResult({ url: file, quality: 'Auto', headers: { 'Referer': embedUrl } })];
-            }
+            var innerHtml = getBody(await http_get(iframeSrc, PLAYER_HDR));
+            var src = unpackIfNeeded(innerHtml);
+            var m3u8 = extractM3u8(src);
+            if (!m3u8) return null;
 
-            return [new StreamResult({ url: m[1], quality: 'Auto', headers: { 'Referer': embedUrl } })];
+            var q = extractQuality(m3u8) || 'Auto';
+            return new StreamResult({
+                url:     m3u8,
+                quality: q,
+                source:  'Cast | ' + q,
+                headers: { 'Referer': getBaseUrl(iframeSrc) + '/' }
+            });
         } catch (_) { return null; }
     }
 
-    async function resolveEmbed(embedUrl, referer) {
+    // ─── Main embed dispatcher ────────────────────────────────────────────────
+    async function resolveEmbed(embedUrl) {
         if (!embedUrl) return null;
-        var host = embedUrl.toLowerCase();
-        if (host.includes('hownetwork'))            return await resolveHownetwork(embedUrl).then(r => r ? [r] : null);
-        if (host.includes('vidhide') ||
-            host.includes('vhide'))                 return await resolveVidhide(embedUrl);
-        return await resolveFilesim(embedUrl);
+        var h = embedUrl.toLowerCase();
+
+        if (h.includes('/iframe/p2p/') || h.includes('cloud.hownetwork')) {
+            var r = await resolveP2P(embedUrl); return r ? [r] : null;
+        }
+        if (h.includes('/iframe/turbovip/') || h.includes('emturbovid') || h.includes('turbovidhls')) {
+            var r = await resolveTurboVip(embedUrl); return r ? [r] : null;
+        }
+        if (h.includes('/iframe/cast/') || h.includes('sb1254w9megshle')) {
+            var r = await resolveCast(embedUrl); return r ? [r] : null;
+        }
+        // Hydrax requires CF Turnstile — skip
+        return null;
     }
 
     // ─── getHome ──────────────────────────────────────────────────────────────
@@ -150,19 +169,16 @@
             { name: 'Film Asian Terbaru',             url: SERIES_URL + '/series/asian/page/1'   },
             { name: 'Film Upload Terbaru',            url: BASE_URL   + '/latest/page/1'         }
         ];
-
         try {
             var result = {};
             await Promise.all(categories.map(async function(cat) {
                 try {
-                    var html  = getBody(await http_get(cat.url, HTML_HDR));
+                    var html = getBody(await http_get(cat.url, HTML_HDR));
                     var items = await parseArticles(html, cat.url);
                     if (items.length) result[cat.name] = items;
                 } catch (_) {}
             }));
-
-            if (!Object.keys(result).length)
-                return cb({ success: false, error: 'Gagal memuat homepage.' });
+            if (!Object.keys(result).length) return cb({ success: false, error: 'Gagal memuat homepage.' });
             cb({ success: true, data: result });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -172,16 +188,14 @@
         var hrefs  = await parseHtml(html, 'article figure a', 'href');
         var imgs   = await parseHtml(html, 'article figure img', 'src');
         var titles = await parseHtml(html, 'article figure h3', 'text');
-
-        var items = [];
+        var items  = [];
         for (var i = 0; i < hrefs.length; i++) {
             var href  = hrefs[i];
             var title = cleanTitle((titles[i] || '').trim());
             if (!href || !title) continue;
-            var fullUrl = href.startsWith('http') ? href : base + href;
             items.push(new MultimediaItem({
                 title:     title,
-                url:       fullUrl,
+                url:       href.startsWith('http') ? href : base + href,
                 posterUrl: imgs[i] || '',
                 type:      'series'
             }));
@@ -204,32 +218,18 @@
             var searchDomain = await getSearchDomain();
             var res  = await http_get(
                 'https://gudangvape.com/search.php?s=' + encodeURIComponent(query) + '&page=1',
-                {
-                    'User-Agent':       UA,
-                    'Accept':           '*/*',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Origin':           searchDomain,
-                    'Referer':          searchDomain + '/'
-                }
+                { 'User-Agent': UA, 'Accept': '*/*', 'X-Requested-With': 'XMLHttpRequest', 'Origin': searchDomain, 'Referer': searchDomain + '/' }
             );
-            var body = getBody(res);
-            var root = JSON.parse(body);
-            var arr  = root.data || root.items || [];
-
+            var arr = (JSON.parse(getBody(res)).data || JSON.parse(getBody(res)).items || []);
             var items = arr.map(function(item) {
-                var type     = item.type === 'series' ? 'series' : 'movie';
-                var url      = type === 'series'
-                    ? (SERIES_URL + '/' + item.slug)
-                    : (BASE_URL   + '/' + item.slug);
-                var rawTitle = (item.title || '').replace(/\(\d{4}\)$/, '').trim();
+                var type = item.type === 'series' ? 'series' : 'movie';
                 return new MultimediaItem({
-                    title:     cleanTitle(rawTitle),
-                    url:       url,
+                    title:     cleanTitle((item.title || '').replace(/\(\d{4}\)$/, '').trim()),
+                    url:       type === 'series' ? (SERIES_URL + '/' + item.slug) : (BASE_URL + '/' + item.slug),
                     posterUrl: item.poster ? (POSTER_CDN + item.poster) : '',
                     type:      type
                 });
             }).filter(function(i) { return i.title; });
-
             cb({ success: true, data: items });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -243,16 +243,12 @@
                 var loc  = res0.headers && (res0.headers['location'] || res0.headers['Location']);
                 if (loc) fixedUrl = loc;
             }
-
             var html = getBody(await http_get(fixedUrl, HTML_HDR));
             var base = getBaseUrl(fixedUrl);
 
-            var rawTitles = await parseHtml(html, 'div.movie-info h1', 'text');
-            var title     = cleanTitle((rawTitles[0] || '').trim()) || 'Unknown';
-            var posters   = await parseHtml(html, 'meta[property="og:image"]', 'content');
-            var poster    = posters[0] || '';
-            var descs     = await parseHtml(html, 'div.meta-info', 'text');
-            var desc      = (descs[0] || '').trim();
+            var title  = cleanTitle(((await parseHtml(html, 'div.movie-info h1', 'text'))[0] || '').trim()) || 'Unknown';
+            var poster = (await parseHtml(html, 'meta[property="og:image"]', 'content'))[0] || '';
+            var desc   = ((await parseHtml(html, 'div.meta-info', 'text'))[0] || '').trim();
 
             var seasonScripts = await parseHtml(html, 'script#season-data', 'html');
             var isSeries      = seasonScripts.length > 0 && seasonScripts[0];
@@ -261,27 +257,21 @@
                 var episodes = [];
                 try {
                     var root = JSON.parse(seasonScripts[0]);
-                    var keys = Object.keys(root);
-                    for (var k = 0; k < keys.length; k++) {
-                        var epArr = root[keys[k]];
-                        for (var i = 0; i < epArr.length; i++) {
-                            var ep       = epArr[i];
-                            var epNum    = ep.episode_no || (i + 1);
-                            var epPoster = ep.thumbnail || ep.poster || ep.image || poster;
+                    for (var k of Object.keys(root)) {
+                        for (var i = 0; i < root[k].length; i++) {
+                            var ep    = root[k][i];
+                            var epNum = ep.episode_no || (i + 1);
                             episodes.push(new Episode({
                                 name:      'Episode ' + epNum,
                                 url:       base + '/' + ep.slug,
                                 season:    ep.s || 1,
                                 episode:   epNum,
-                                posterUrl: epPoster
+                                posterUrl: ep.thumbnail || ep.poster || ep.image || poster
                             }));
                         }
                     }
                 } catch (_) {}
-
-                cb({ success: true, data: new MultimediaItem({
-                    title, url, posterUrl: poster, type: 'series', description: desc, episodes
-                })});
+                cb({ success: true, data: new MultimediaItem({ title, url, posterUrl: poster, type: 'series', description: desc, episodes }) });
             } else {
                 cb({ success: true, data: new MultimediaItem({
                     title, url, posterUrl: poster, type: 'movie', description: desc,
@@ -294,32 +284,22 @@
     // ─── loadStreams ───────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
-            var html    = getBody(await http_get(url, HTML_HDR));
-            var players = await parseHtml(html, 'ul#player-list > li a', 'href');
+            var html        = getBody(await http_get(url, HTML_HDR));
+            var playerHrefs = await parseHtml(html, 'ul#player-list > li a', 'href');
 
-            if (!players.length)
-                return cb({ success: false, error: 'Tidak ada player ditemukan.' });
+            if (!playerHrefs.length) return cb({ success: false, error: 'Tidak ada player ditemukan.' });
 
             var streams = [];
-
-            await Promise.all(players.map(async function(playerHref) {
-                if (!playerHref) return;
+            await Promise.all(playerHrefs.map(async function(href) {
+                if (!href) return;
                 try {
-                    var fullHref = playerHref.startsWith('http') ? playerHref : (getBaseUrl(url) + playerHref);
-                    var pageHtml = getBody(await http_get(fullHref, { ...HTML_HDR, 'Referer': SERIES_URL + '/' }));
-                    var iframes  = await parseHtml(pageHtml, 'div.embed-container iframe', 'src');
-                    var iframeSrc = iframes[0];
-                    if (!iframeSrc) return;
-
-                    var resolved = await resolveEmbed(iframeSrc, fullHref);
-                    if (resolved && resolved.length) {
-                        streams = streams.concat(resolved);
-                    }
+                    var fullHref = href.startsWith('http') ? href : (getBaseUrl(url) + href);
+                    var resolved = await resolveEmbed(fullHref);
+                    if (resolved && resolved.length) streams = streams.concat(resolved);
                 } catch (_) {}
             }));
 
-            if (!streams.length)
-                return cb({ success: false, error: 'Stream tidak ditemukan.' });
+            if (!streams.length) return cb({ success: false, error: 'Stream tidak ditemukan.' });
             cb({ success: true, data: streams });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
