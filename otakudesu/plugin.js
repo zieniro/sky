@@ -3,9 +3,9 @@
     // ─── Constants ────────────────────────────────────────────────────────────
     var MAX_STREAMS = 6;
     var UA_LIST = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0'
     ];
     var UA = UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
     var HTML_HEADERS = {
@@ -25,10 +25,10 @@
     }
 
     function getBody(res) {
-        if (!res)                    return '';
-        if (typeof res === 'string') return res;
+        if (!res)                         return '';
+        if (typeof res === 'string')      return res;
         if (typeof res.body === 'string') return res.body;
-        if (res.body)                return forceString(res.body);
+        if (res.body)                     return forceString(res.body);
         return forceString(res);
     }
 
@@ -82,12 +82,10 @@
     function extractSeason(href, rawTitle) {
         var fromUrl = href.match(/season[- _](\d+)/i)?.[1];
         if (fromUrl) return parseInt(fromUrl, 10);
-
         var fromTitle = rawTitle.match(/season\s+(\d+)/i)?.[1]
-            || rawTitle.match(/s(\d{2,})\s*ep/i)?.[1]; // format "S02 EP01"
+            || rawTitle.match(/s(\d{2,})\s*ep/i)?.[1];
         if (fromTitle) return parseInt(fromTitle, 10);
-
-        return 1; // default
+        return 1;
     }
 
     // ─── Resolvers ────────────────────────────────────────────────────────────
@@ -112,7 +110,7 @@
 
     async function resolveFiledon(embedUrl) {
         try {
-            var body = getBody(await rawGet(embedUrl, { ...HTML_HEADERS, Referer: 'https://otakudesu.blog/' }));
+            var body = getBody(await rawGet(embedUrl, { ...HTML_HEADERS, Referer: manifest.baseUrl + '/' }));
             if (!body) return null;
             var m = body.match(/data-page="([^"]+)"/);
             if (!m) return null;
@@ -158,12 +156,12 @@
                 try { return { url: embedUrl, referer: new URL(embedUrl).origin + '/' }; }
                 catch (_) { return { url: embedUrl, referer: episodeReferer }; }
             }
-            if (embedUrl.includes('archive.org'))    return { url: embedUrl, referer: 'https://archive.org/' };
-            if (embedUrl.includes('googlevideo'))     return { url: embedUrl, referer: 'https://www.blogger.com/' };
-            if (embedUrl.includes('mega.nz'))         return null;
-            if (embedUrl.includes('filedon') || serverName.includes('filedon'))      return resolveFiledon(embedUrl);
-            if (embedUrl.includes('blogger.com/video') || serverName.includes('blogger')) return resolveBlogger(embedUrl);
-            if (embedUrl.includes('ondesu') || serverName.includes('ondesu'))        return resolveOndesu(embedUrl, episodeReferer);
+            if (embedUrl.includes('archive.org'))                                        return { url: embedUrl, referer: 'https://archive.org/' };
+            if (embedUrl.includes('googlevideo'))                                        return { url: embedUrl, referer: 'https://www.blogger.com/' };
+            if (embedUrl.includes('mega.nz'))                                            return null;
+            if (embedUrl.includes('filedon') || serverName.includes('filedon'))          return resolveFiledon(embedUrl);
+            if (embedUrl.includes('blogger.com/video') || serverName.includes('blogger'))return resolveBlogger(embedUrl);
+            if (embedUrl.includes('ondesu') || serverName.includes('ondesu'))            return resolveOndesu(embedUrl, episodeReferer);
             return resolveWithUnpack(embedUrl, episodeReferer);
         } catch (_) { return null; }
     }
@@ -173,6 +171,7 @@
         if (!title) return null;
         var query = `query ($search: String) {
             Media(search: $search, type: ANIME) {
+                id
                 idMal
                 characters(sort: ROLE, perPage: 15) {
                     edges { role node { name { full native } image { large medium } } }
@@ -180,7 +179,7 @@
             }
         }`;
         try {
-            var res  = await http_post('https://graphql.anilist.co',
+            var res   = await http_post('https://graphql.anilist.co',
                 { 'Content-Type': 'application/json', Accept: 'application/json' },
                 JSON.stringify({ query, variables: { search: title } })
             );
@@ -189,6 +188,7 @@
             if (!media) return null;
             return {
                 idMal:      media.idMal ? String(media.idMal) : null,
+                idAniList: media.id    ? String(media.id)    : null,
                 characters: media.characters?.edges ?? []
             };
         } catch (_) { return null; }
@@ -205,20 +205,16 @@
         } catch (_) { return null; }
     }
 
-    // ─── Parallelized fetchMetadata ───────────────────────────────────────────
+    // ─── fetchMetadata ────────────────────────────────────────────────────────
     async function fetchMetadata(titles) {
-        var validTitles = titles.filter(Boolean);
-        if (!validTitles.length) return { aniListData: null, aniZip: null };
+    var validTitles = titles.filter(Boolean);
+    if (!validTitles.length) return { aniListData: null, aniZip: null };
 
-        // Race all title variants in parallel, pick first with idMal
-        var aniListData = await Promise.all(validTitles.map(getAniListData))
-            .then(results => results.find(r => r?.idMal) || null);
+    var aniListData = await Promise.all(validTitles.map(getAniListData))
+        .then(function(results) { return results.find(function(r) { return r?.idMal; }) || null; });
 
-        var aniZip = aniListData?.idMal
-            ? await getAniZipByMalId(aniListData.idMal)
-            : null;
-
-        return { aniListData, aniZip };
+    var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
+    return { aniListData, aniZip };
     }
 
     // ─── Shared list page parser ──────────────────────────────────────────────
@@ -228,12 +224,14 @@
             var links   = await parseHtml(html, '.venz li .detpost .thumb a',    'href');
             var titles  = await parseHtml(html, '.venz li .detpost h2.jdlflm',  'text');
             var posters = await parseHtml(html, '.venz li .detpost .thumbz img', 'src');
-            return links.map((href, i) => new MultimediaItem({
-                title:     (titles[i] || 'No Title').trim(),
-                url:       href,
-                posterUrl: posters[i] || '',
-                type:      'anime'
-            }));
+            return links.map(function (href, i) {
+                return new MultimediaItem({
+                    title:     (titles[i] || 'No Title').trim(),
+                    url:       href,
+                    posterUrl: posters[i] || '',
+                    type:      'anime'
+                });
+            });
         } catch (_) { return []; }
     }
 
@@ -281,22 +279,23 @@
                 var links   = await parseHtml(html, '.venz li .detpost .thumb a',    'href');
                 var titles  = await parseHtml(html, '.venz li .detpost h2.jdlflm',  'text');
                 var posters = await parseHtml(html, '.venz li .detpost .thumbz img', 'src');
-                items = links.map((href, i) => new MultimediaItem({
-                    title:     (titles[i] || 'Unknown').trim(),
-                    url:       href,
-                    posterUrl: posters[i] || '',
-                    type:      'anime'
-                }));
+                items = links.map(function (href, i) {
+                    return new MultimediaItem({
+                        title:     (titles[i] || 'Unknown').trim(),
+                        url:       href,
+                        posterUrl: posters[i] || '',
+                        type:      'anime'
+                    });
+                });
             }
 
             cb({ success: true, data: items });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─── load (detail page) ───────────────────────────────────────────────────
+    // ─── load ─────────────────────────────────────────────────────────────────
     async function load(url, cb) {
         try {
-            //Fetch page HTML + metadata concurrently
             var html = getBody(await rawGet(url));
 
             var rawInfo = await parseHtml(html, '.infozingle p span', 'text');
@@ -316,12 +315,11 @@
             if (!animeTitle) {
                 var seg = url.split('/').filter(Boolean);
                 animeTitle = (seg.at(-1) || 'Anime Detail').replace(/-/g, ' ')
-                    .replace(/\b\w/g, c => c.toUpperCase());
+                    .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
             }
 
             var searchTitles = [englishTitle, animeTitle, japaneseTitle].filter(Boolean);
 
-            //Run scraping + metadata fetch in parallel
             var [
                 rawPoster,
                 rawSyn,
@@ -336,8 +334,8 @@
                 fetchMetadata(searchTitles)
             ]);
 
-            var poster   = rawPoster[0] || '';
-            var synopsis = rawSyn.join('\n\n').trim();
+            var poster    = rawPoster[0] || '';
+            var synopsis  = rawSyn.join('\n\n').trim();
             var isOngoing = html.includes('Ongoing');
 
             var validLinks = [], validTitles = [];
@@ -350,7 +348,7 @@
             validLinks.reverse();
             validTitles.reverse();
 
-            var cast = (aniListData?.characters ?? []).map(edge => {
+            var cast = (aniListData?.characters ?? []).map(function (edge) {
                 var node = edge.node;
                 if (!node) return null;
                 return new Actor({
@@ -365,42 +363,52 @@
                 || aniZip?.titles?.ja
                 || animeTitle;
 
-            var episodes = validLinks.map((href, idx) => {
-            var rawEpTitle = validTitles[idx] || '';
+            var episodes = validLinks.map(function (href, idx) {
+                var rawEpTitle = (validTitles[idx] || '')
+                .replace(/\s*subtitle\s+indonesia\s*/gi, '')
+                .trim();
 
-            var epNumRaw = parseFloat(href.match(/episode[- ](\d+(?:\.\d+)?)/i)?.[1])
-                || parseFloat(rawEpTitle.match(/episode\s+(\d+(?:\.\d+)?)/i)?.[1])
-                || parseFloat(rawEpTitle.match(/(\d+(?:\.\d+)?)(?!.*\d)/)?.[1])
-                || (idx + 1);
+                var epNumRaw = parseFloat(href.match(/episode[- ](\d+(?:\.\d+)?)/i)?.[1])
+                    || parseFloat(rawEpTitle.match(/episode\s+(\d+(?:\.\d+)?)/i)?.[1])
+                    || parseFloat(rawEpTitle.match(/(\d+(?:\.\d+)?)(?!.*\d)/)?.[1])
+                    || (idx + 1);
 
-            var epNum   = Number.isFinite(epNumRaw) ? Math.round(epNumRaw) : (idx + 1);
-            var season  = extractSeason(href, rawEpTitle);
+                var epNum  = Number.isFinite(epNumRaw) ? Math.round(epNumRaw) : (idx + 1);
+                var season = extractSeason(href, rawEpTitle);
 
-            var aniEp = aniZip?.episodes?.[String(epNum)]
-                || aniZip?.episodes?.[String(Math.floor(epNumRaw ?? epNum))]
-                || null;
+                var aniEp = aniZip?.episodes?.[String(epNum)]
+                    || aniZip?.episodes?.[String(Math.floor(epNumRaw ?? epNum))]
+                    || null;
 
-            return new Episode({
-                name:        aniEp?.title?.en || aniEp?.title?.['x-jat'] || aniEp?.title?.ja || rawEpTitle || ('Episode ' + epNum),
-                url:         href,
-                season,           
-                episode:     epNum,
-                dubStatus:   'subbed',
-                posterUrl:   aniEp?.image || poster,
-                description: aniEp?.overview ? String(aniEp.overview) : '',
-                runtime:     aniEp?.runtime ? Math.round(aniEp.runtime) : undefined
+                return new Episode({
+                    name:        aniEp?.title?.en || aniEp?.title?.['x-jat'] || aniEp?.title?.ja || rawEpTitle || ('Episode ' + epNum),
+                    url:         href,
+                    season,
+                    episode:     epNum,
+                    dubStatus:   'subbed',
+                    posterUrl:   aniEp?.image || poster,
+                    description: aniEp?.overview ? String(aniEp.overview) : '',
+                    runtime:     aniEp?.runtime ? Math.round(aniEp.runtime) : undefined
+                });
             });
-        });
-            cb({ success: true, data: new MultimediaItem({
-                title:       resolvedTitle,
-                url,
-                posterUrl:   poster,
-                type:        'anime',
-                status:      isOngoing ? 'ongoing' : 'completed',
-                description: synopsis,
-                cast,
-                episodes
-            })});
+
+            cb({
+                success: true,
+                data: new MultimediaItem({
+                    title:       resolvedTitle,
+                    url,
+                    posterUrl:   poster,
+                    type:        'anime',
+                    status:      isOngoing ? 'ongoing' : 'completed',
+                    description: synopsis,
+                    cast,
+                    episodes,
+                    syncData:    aniListData?.idMal ?
+                        { mal: aniListData.idMal,
+                          anilist: aniListData.idAniList
+                    } : undefined
+                })
+            });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
@@ -431,7 +439,7 @@
 
             if (!nonce) return cb({ success: false, error: 'Gagal mengambil nonce.' });
 
-            var tasks = dataContents.map(async (dataContent, i) => {
+            var tasks = dataContents.map(async function (dataContent, i) {
                 try {
                     dataContent = (dataContent || '').trim();
                     if (!dataContent || dataContent === '#') return null;
@@ -466,7 +474,8 @@
 
                     return new StreamResult({
                         url:     resolved.url,
-                        source:  'OtakuDesu - ' + serverName + ' [' + (tokenObj.q || '') + ']',
+                        quality: tokenObj.q || undefined,
+                        source:  'OtakuDesu - ' + serverName + (tokenObj.q ? ' [' + tokenObj.q + ']' : ''),
                         headers: { 'User-Agent': UA, Referer: resolved.referer || url }
                     });
                 } catch (_) { return null; }
@@ -482,9 +491,9 @@
     }
 
     // ─── Expose ───────────────────────────────────────────────────────────────
-    globalThis.getHome    = getHome;
-    globalThis.search     = search;
-    globalThis.load       = load;
-    globalThis.loadStreams = loadStreams;
+    globalThis.getHome     = getHome;
+    globalThis.search      = search;
+    globalThis.load        = load;
+    globalThis.loadStreams  = loadStreams;
 
 })();
