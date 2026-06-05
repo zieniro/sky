@@ -171,6 +171,7 @@
         if (!title) return null;
         var query = `query ($search: String) {
             Media(search: $search, type: ANIME) {
+                id
                 idMal
                 characters(sort: ROLE, perPage: 15) {
                     edges { role node { name { full native } image { large medium } } }
@@ -187,6 +188,7 @@
             if (!media) return null;
             return {
                 idMal:      media.idMal ? String(media.idMal) : null,
+                idAniList: media.id    ? String(media.id)    : null,
                 characters: media.characters?.edges ?? []
             };
         } catch (_) { return null; }
@@ -205,32 +207,14 @@
 
     // ─── fetchMetadata ────────────────────────────────────────────────────────
     async function fetchMetadata(titles) {
-        var validTitles = titles.filter(Boolean);
-        if (!validTitles.length) return { aniListData: null, aniZip: null };
+    var validTitles = titles.filter(Boolean);
+    if (!validTitles.length) return { aniListData: null, aniZip: null };
 
-        var aniListData = await http_parallel(validTitles.map(function (t) {
-            return {
-                url:     'https://graphql.anilist.co',
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-                body:    JSON.stringify({
-                    query: 'query($s:String){Media(search:$s,type:ANIME){idMal characters(sort:ROLE,perPage:15){edges{role node{name{full native}image{large medium}}}}}}',
-                    variables: { s: t }
-                })
-            };
-        })).then(function (results) {
-            return results.map(function (res) {
-                try {
-                    var data  = typeof res?.body === 'string' ? JSON.parse(res.body) : res?.body;
-                    var media = data?.data?.Media;
-                    if (!media) return null;
-                    return { idMal: media.idMal ? String(media.idMal) : null, characters: media.characters?.edges ?? [] };
-                } catch (_) { return null; }
-            }).find(function (r) { return r?.idMal; }) || null;
-        });
+    var aniListData = await Promise.all(validTitles.map(getAniListData))
+        .then(function(results) { return results.find(function(r) { return r?.idMal; }) || null; });
 
-        var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
-        return { aniListData, aniZip };
+    var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
+    return { aniListData, aniZip };
     }
 
     // ─── Shared list page parser ──────────────────────────────────────────────
@@ -380,7 +364,9 @@
                 || animeTitle;
 
             var episodes = validLinks.map(function (href, idx) {
-                var rawEpTitle = validTitles[idx] || '';
+                var rawEpTitle = (validTitles[idx] || '')
+                .replace(/\s*subtitle\s+indonesia\s*/gi, '')
+                .trim();
 
                 var epNumRaw = parseFloat(href.match(/episode[- ](\d+(?:\.\d+)?)/i)?.[1])
                     || parseFloat(rawEpTitle.match(/episode\s+(\d+(?:\.\d+)?)/i)?.[1])
@@ -417,7 +403,10 @@
                     description: synopsis,
                     cast,
                     episodes,
-                    syncData:    aniListData?.idMal ? { mal: aniListData.idMal } : undefined
+                    syncData:    aniListData?.idMal ?
+                        { mal: aniListData.idMal,
+                          anilist: aniListData.idAniList
+                    } : undefined
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
