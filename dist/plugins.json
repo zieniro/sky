@@ -1,5 +1,23 @@
 [
   {
+    "packageName": "com.arranoust.animexin",
+    "name": "AnimeXin",
+    "version": 1,
+    "baseUrl": "https://animexin.dev",
+    "description": "AnimeXin - Donghua Streaming",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Anime",
+      "Movies"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/add-plugin/dist/com.arranoust.animexin.sky"
+  },
+  {
     "packageName": "com.arranoust.anizone",
     "name": "AniZone",
     "version": 7,
@@ -20,7 +38,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.anizone.sky"
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/add-plugin/dist/com.arranoust.anizone.sky"
   },
   {
     "packageName": "com.arranoust.layarkaca",
@@ -44,7 +62,7 @@
       "Movies",
       "Series"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.layarkaca.sky"
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/add-plugin/dist/com.arranoust.layarkaca.sky"
   },
   {
     "packageName": "com.arranoust.otakudesu",
@@ -61,7 +79,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.otakudesu.sky"
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/add-plugin/dist/com.arranoust.otakudesu.sky"
   },
   {
     "packageName": "com.arranoust.samehadaku",
@@ -78,7 +96,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.samehadaku.sky"
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/add-plugin/dist/com.arranoust.samehadaku.sky"
   },
   {
     "packageName": "com.arranoust.torrentio",
@@ -109,6 +127,6 @@
         "baseUrl": "https://torrentio.strem.fun/providers=nyaasi,tokyotosho,anidex%7Csort=seeders"
       }
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.torrentio.sky"
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/add-plugin/dist/com.arranoust.torrentio.sky"
   }
 ]
