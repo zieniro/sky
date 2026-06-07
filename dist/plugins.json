@@ -1,0 +1,114 @@
+[
+  {
+    "packageName": "com.arranoust.anizone",
+    "name": "AniZone",
+    "version": 7,
+    "baseUrl": "https://anizone.to",
+    "domains": [
+      {
+        "name": "anizone.to",
+        "url": "https://anizone.to"
+      }
+    ],
+    "description": "AniZone - Anime Streaming with Multi-Language Softsubs",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.anizone.sky"
+  },
+  {
+    "packageName": "com.arranoust.layarkaca",
+    "name": "LayarKaca",
+    "version": 3,
+    "baseUrl": "https://lk21.de",
+    "domains": [
+      {
+        "name": "lk21.de",
+        "url": "https://lk21.de"
+      }
+    ],
+    "description": "LayarKaca - Film & Series Subtitle Indonesia",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Movies",
+      "Series"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.layarkaca.sky"
+  },
+  {
+    "packageName": "com.arranoust.otakudesu",
+    "name": "OtakuDesu",
+    "version": 5,
+    "baseUrl": "https://otakudesu.blog",
+    "description": "OtakuDesu - Streaming Anime Subtitle Indonesia",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.otakudesu.sky"
+  },
+  {
+    "packageName": "com.arranoust.samehadaku",
+    "name": "Samehadaku",
+    "version": 5,
+    "baseUrl": "https://www.sankavollerei.com",
+    "description": "Samehadaku - Nonton Anime Sub Indo Terbaru dengan Kualitas Video HD Terlengkap",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.samehadaku.sky"
+  },
+  {
+    "packageName": "com.arranoust.torrentio",
+    "name": "Torrentio",
+    "version": 1,
+    "baseUrl": "https://torrentio.strem.fun",
+    "description": "Torrentio - Movies, Series & Anime via Torrent",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Movies",
+      "Series",
+      "Anime"
+    ],
+    "providers": [
+      {
+        "id": "Torrentio",
+        "name": "Torrentio",
+        "baseUrl": "https://torrentio.strem.fun"
+      },
+      {
+        "id": "TorrentioAnime",
+        "name": "Torrentio Anime",
+        "baseUrl": "https://torrentio.strem.fun/providers=nyaasi,tokyotosho,anidex%7Csort=seeders"
+      }
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.torrentio.sky"
+  }
+]
