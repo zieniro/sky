@@ -1,8 +1,7 @@
-name: Build Preview (Feature Branch)
+name: Build and Deploy Repository
 on:
   push:
-    branches-ignore:
-      - main
+    branches: [ main ]
     paths-ignore:
       - 'dist/**'
       - 'README.md'
@@ -15,21 +14,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Deploy Repository (preview URL)
+      - name: Deploy Repository
         run: |
           npm install -g skystream-cli
-          skystream deploy -u https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}
-
-      - name: Commit and Push to same branch
+          skystream deploy -u https://raw.githubusercontent.com/${{ github.repository }}/main
+      - name: Commit and Push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add dist/
-          git commit -m "chore: preview build [${{ github.ref_name }}] [skip ci]" || echo "No changes to commit"
+          git add .
+          git commit -m "chore: automated deploy [skip ci]" || echo "No changes to commit"
           git push
