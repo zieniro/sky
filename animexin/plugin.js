@@ -71,73 +71,92 @@
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
     // Dailymotion: geo.dailymotion.com/video/{id}.json → qualities.auto[0].url
-    async function resolveDailymotion(embedUrl) {
+    async function resolveDailymotion(embedUrl, label) {
         try {
-            // Extract video ID from embed URL
-            // geo.dailymotion.com/player/x1kcvu.html?video=k4TihWUXxmhg3xGt5lo
             var videoId = (embedUrl.match(/[?&]video=([^&]+)/) || [])[1];
-            if (!videoId) {
-                // fallback: /video/xABCDEF pattern
-                videoId = (embedUrl.match(/\/video\/([a-z0-9]+)/i) || [])[1];
-            }
+            if (!videoId) videoId = (embedUrl.match(/\/video\/([a-z0-9]+)/i) || [])[1];
             if (!videoId) return null;
 
-            var apiUrl = 'https://geo.dailymotion.com/video/' + videoId + '.json'
-                + '?legacy=true&embedder=' + encodeURIComponent(BASE + '/');
+            // player-id and publisher-id from embed URL (needed for proper dmTs/dmV1st)
+            var playerId  = (embedUrl.match(/player-id=([^&]+)/) || [])[1] || 'x1kcvu';
+            var pubId     = (embedUrl.match(/publisher-id=([^&]+)/) || [])[1] || '';
+            var dmV1st    = [8,4,4,4,12].map(function(n) {
+                return Math.random().toString(16).substring(2, 2+n).padStart(n, '0');
+            }).join('-');
+            var dmTs      = String(Math.floor(Math.random() * 999999));
 
-            var res  = getBody(await http_get(apiUrl, {
+            var apiUrl = 'https://geo.dailymotion.com/video/' + videoId + '.json'
+                + '?legacy=true'
+                + '&embedder='     + encodeURIComponent(BASE + '/')
+                + '&player-id='    + encodeURIComponent(playerId)
+                + (pubId ? '&publisher-id=' + encodeURIComponent(pubId) : '')
+                + '&dmTs='         + dmTs
+                + '&dmV1st='       + dmV1st;
+
+            var json = JSON.parse(getBody(await http_get(apiUrl, {
                 'User-Agent': UA,
                 'Referer':    BASE + '/',
                 'Accept':     'application/json'
-            }));
-            var json = JSON.parse(res);
+            })));
 
             var m3u8 = json.qualities && json.qualities.auto && json.qualities.auto[0] && json.qualities.auto[0].url;
             if (!m3u8) return null;
 
+            // Best available quality from stream_formats (e.g. {380,480,720,1080})
+            var formats = json.stream_formats || {};
+            var maxQ    = Object.keys(formats).map(Number).sort(function(a,b){return b-a;})[0];
+            var quality = maxQ ? maxQ + 'p' : 'Auto';
+
             return new StreamResult({
                 url:     m3u8,
-                quality: 'Auto',
-                source:  'Dailymotion',
+                quality: quality,
+                source:  (label || 'Dailymotion').trim(),
                 headers: { 'Referer': 'https://geo.dailymotion.com/' }
             });
         } catch (_) { return null; }
     }
 
-    // DoodStream: replicate DoodExtractor logic
-    async function resolveDood(embedUrl) {
+    // DoodStream: fetch embed page → extract /pass_md5/ path → fetch CDN base URL → append random token
+    async function resolveDood(embedUrl, label) {
         try {
-            var res  = getBody(await http_get(embedUrl, { 'User-Agent': UA, 'Referer': BASE + '/' }));
-            var md5Match = res.match(/\/pass_md5\/[^'"\s]*/);
-            if (!md5Match) return null;
-
             var hostname = new URL(embedUrl).hostname;
-            var md5Url   = 'https://' + hostname + md5Match[0];
-            var md5Res   = getBody(await http_get(md5Url, { 'Referer': embedUrl }));
-            if (!md5Res) return null;
+            var origin   = 'https://' + hostname;
+            var res      = getBody(await http_get(embedUrl, { 'User-Agent': UA, 'Referer': BASE + '/' }));
 
-            var tokenMatch = md5Url.match(/token=([^&]+)/);
-            var token = tokenMatch ? tokenMatch[1] : '';
+            // Matches: $.get('/pass_md5/ID/TOKEN', ...) or "/pass_md5/..."
+            var md5Match = res.match(/['"]?(\/pass_md5\/[^'")\s]+)['"]?/);
+            if (!md5Match) return null;
+            var md5Path = md5Match[1];
+
+            // Extract token — last segment of the path
+            var token  = md5Path.split('/').pop() || '';
+            var md5Url = origin + md5Path;
+
+            var cdnBase = getBody(await http_get(md5Url, {
+                'User-Agent': UA,
+                'Referer':    embedUrl
+            })).trim();
+
+            if (!cdnBase || cdnBase === 'RELOAD' || !cdnBase.startsWith('http')) return null;
+
             var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
             var rand  = '';
             for (var i = 0; i < 10; i++)
                 rand += chars.charAt(Math.floor(Math.random() * chars.length));
 
-            var finalUrl = md5Res.trim() + rand + '?token=' + token + '&expiry=' + Date.now();
-
             return new StreamResult({
-                url:     finalUrl,
+                url:     cdnBase + rand + '?token=' + token + '&expiry=' + Date.now(),
                 quality: 'Auto',
-                source:  'DoodStream',
-                headers: { 'Referer': 'https://dood.watch/' }
+                source:  (label || 'DoodStream').trim(),
+                headers: { 'Referer': origin + '/' }
             });
         } catch (_) { return null; }
     }
 
-    async function resolveEmbed(embedUrl) {
+    async function resolveEmbed(embedUrl, label) {
         var h = embedUrl.toLowerCase();
-        if (h.includes('dailymotion.com'))                      return resolveDailymotion(embedUrl);
-        if (h.includes('playmogo.com') || h.includes('dood.')) return resolveDood(embedUrl);
+        if (h.includes('dailymotion.com'))                      return resolveDailymotion(embedUrl, label);
+        if (h.includes('playmogo.com') || h.includes('dood.')) return resolveDood(embedUrl, label);
         return null; // seekplayer (SPA), ok.ru, rumble, odysee, mega → skip
     }
 
@@ -243,24 +262,24 @@
             var html    = getBody(await http_get(url, HEADERS));
             var streams = [];
 
-            // Extract all base64 option values from .mobius select
-            var optValues = [];
-            var re = /<option[^>]+value=["']([A-Za-z0-9+/=]{20,})["']/gi;
+            // Capture both value (base64) and text label from each <option>
+            var options = [];
+            var re = /<option[^>]+value=["']([A-Za-z0-9+/=]{20,})["'][^>]*>\s*([^<]+?)\s*<\/option>/gi;
             var m;
             while ((m = re.exec(html)) !== null) {
-                optValues.push(m[1]);
+                options.push({ b64: m[1], label: m[2].trim() });
             }
 
-            if (!optValues.length)
+            if (!options.length)
                 return cb({ success: false, error: 'No video options found.' });
 
-            await Promise.all(optValues.map(async function (b64) {
+            await Promise.all(options.map(async function (opt) {
                 try {
-                    var decoded  = safeAtob(b64);
+                    var decoded  = safeAtob(opt.b64);
                     if (!decoded) return;
                     var embedUrl = fixProtocol(extractIframeSrc(decoded));
                     if (!embedUrl || !embedUrl.startsWith('http')) return;
-                    var result = await resolveEmbed(embedUrl);
+                    var result = await resolveEmbed(embedUrl, opt.label);
                     if (result) streams.push(result);
                 } catch (_) {}
             }));
