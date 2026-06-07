@@ -102,16 +102,32 @@
             var m3u8 = json.qualities && json.qualities.auto && json.qualities.auto[0] && json.qualities.auto[0].url;
             if (!m3u8) return null;
 
-            // Best available quality from stream_formats (e.g. {380,480,720,1080})
             var formats = json.stream_formats || {};
             var maxQ    = Object.keys(formats).map(Number).sort(function(a,b){return b-a;})[0];
             var quality = maxQ ? maxQ + 'p' : 'Auto';
 
+            // Extract subtitles from geo API response
+            var subtitles = [];
+            var subData   = json.subtitles && json.subtitles.data;
+            if (subData) {
+                Object.keys(subData).forEach(function (lang) {
+                    var sub = subData[lang];
+                    if (sub && sub.urls && sub.urls[0]) {
+                        subtitles.push({
+                            url:   sub.urls[0],
+                            label: sub.label || lang,
+                            lang:  lang
+                        });
+                    }
+                });
+            }
+
             return new StreamResult({
-                url:     m3u8,
-                quality: quality,
-                source:  (label || 'Dailymotion').trim(),
-                headers: { 'Referer': 'https://geo.dailymotion.com/' }
+                url:       m3u8,
+                quality:   quality,
+                source:    (label || 'Dailymotion').trim(),
+                headers:   { 'Referer': 'https://geo.dailymotion.com/' },
+                subtitles: subtitles.length ? subtitles : undefined
             });
         } catch (_) { return null; }
     }
