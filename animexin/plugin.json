@@ -1,0 +1,10 @@
+{
+  "packageName": "com.arranoust.animexin",
+  "name": "AnimeXin",
+  "version": 1,
+  "baseUrl": "https://animexin.dev",
+  "description": "AnimeXin - Donghua Streaming",
+  "authors": ["arranoust"],
+  "languages": ["en"],
+  "categories": ["Anime", "Movies"]
+}
