@@ -46,7 +46,14 @@
             .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
     }
 
-    // Extract episode number from title string like "Fifties Professionals (2026) Episode 6"
+    function cleanTitle(raw) {
+        return (raw || '').replace(/\s+Episode\s+[\d.]+\s*$/i, '').trim();
+    }
+
+    function dramaSlug(url) {
+        return url.replace(/-episode-[\d-]+\.html$/i, '').replace(/\.html$/i, '');
+    }
+
     function extractEpNum(title) {
         var m = (title || '').match(/Episode\s+(\d+(?:\.\d+)?)/i);
         return m ? parseFloat(m[1]) : null;
@@ -54,33 +61,45 @@
 
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
-    // megaplay.su: try to extract direct m3u8/mp4 from embed page
     async function resolveMegaplay(embedUrl) {
         try {
             var body = getBody(await http_get(embedUrl, {
-                'User-Agent': UA,
-                'Referer':    BASE + '/',
-                'Accept':     'text/html,*/*'
+                'User-Agent': UA, 'Referer': BASE + '/', 'Accept': 'text/html,*/*'
             }));
             if (!body) return null;
-
-            // Try P.A.C.K.E.R. unpack
             var src = body;
             if (body.includes('eval(function(p,a,c,k,e')) {
                 try { src = getAndUnpack(body); } catch (_) {}
             }
-
             var m = src.match(/["'](https?:\/\/[^"']+\.m3u8[^"']{0,300}?)["']/i)
                  || src.match(/file\s*:\s*["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i)
                  || src.match(/source\s*:\s*["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i)
                  || src.match(/["'](https?:\/\/[^"']{20,}\.mp4[^"']{0,200}?)["']/i);
             if (!m) return null;
+            return new StreamResult({
+                url: m[1], quality: 'Auto', source: 'MegaPlay',
+                headers: { 'Referer': 'https://megaplay.su/' }
+            });
+        } catch (_) { return null; }
+    }
+
+    async function resolveVidmoly(embedUrl) {
+        try {
+            var body = getBody(await http_get(embedUrl, {
+                'User-Agent': UA, 'Referer': BASE + '/', 'Accept': 'text/html,*/*'
+            }));
+            if (!body) return null;
+
+            var m = body.match(/["']file["']\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']{0,500}?)["']/i)
+                 || body.match(/[?&]url=(https?:\/\/[^&"'\s]+\.m3u8[^&"'\s]*)/i)
+                 || body.match(/["'](https?:\/\/[^"']+\.m3u8[^"']{0,500}?)["']/i);
+
+            if (!m) return null;
+            var m3u8 = decodeURIComponent(m[1]);
 
             return new StreamResult({
-                url:     m[1],
-                quality: 'Auto',
-                source:  'MegaPlay',
-                headers: { 'Referer': 'https://megaplay.su/' }
+                url: m3u8, quality: 'Auto', source: 'Vidmoly',
+                headers: { 'Referer': 'https://vidmoly.biz/' }
             });
         } catch (_) { return null; }
     }
@@ -88,8 +107,9 @@
     async function resolveEmbed(embedUrl, label) {
         if (!embedUrl) return null;
         var h = embedUrl.toLowerCase();
-        if (h.includes('megaplay.su')) return resolveMegaplay(embedUrl);
-        // Generic fallback: try unpack + m3u8 extraction
+        if (h.includes('megaplay.su'))              return resolveMegaplay(embedUrl);
+        if (h.includes('vidmoly.'))                 return resolveVidmoly(embedUrl);
+        // Generic fallback
         try {
             var body = getBody(await http_get(embedUrl, { 'User-Agent': UA, 'Referer': BASE + '/' }));
             var src = body;
@@ -102,37 +122,48 @@
             var origin = '';
             try { origin = new URL(embedUrl).origin + '/'; } catch (_) {}
             return new StreamResult({
-                url:     m[1],
-                quality: 'Auto',
-                source:  label || 'Server',
+                url: m[1], quality: 'Auto', source: label || 'Server',
                 headers: { 'Referer': origin || BASE + '/' }
             });
         } catch (_) { return null; }
     }
 
-    // ─── parseCards: shared parser for homepage + category pages ──────────────
+    // ─── parseCards ───────────────────────────────────────────────────────────
 
-    async function parseCards(html) {
-        // Homepage uses lazy-loaded images: data-original attr
+    async function parseCards(html, dedup) {
         var hrefs   = await parseHtml(html, 'ul.box li a.mask', 'href');
         var titles  = await parseHtml(html, 'ul.box li a.mask h3', 'text');
         var posters = await parseHtml(html, 'ul.box li a.mask img', 'data-original');
-
-        // Fallback for non-lazy pages
-        if (!posters.filter(Boolean).length) {
+        if (!posters.filter(Boolean).length)
             posters = await parseHtml(html, 'ul.box li a.mask img', 'src');
-        }
 
-        return hrefs.map(function (href, i) {
-            var title = decodeHtmlEntities(titles[i] || '');
-            if (!href || !title) return null;
-            return new MultimediaItem({
+        var seen = {};
+        var items = [];
+
+        for (var i = 0; i < hrefs.length; i++) {
+            var rawTitle = decodeHtmlEntities(titles[i] || '');
+            var href     = hrefs[i];
+            if (!href || !rawTitle) continue;
+
+            var fullUrl = href.startsWith('http') ? href : BASE + href;
+            var title   = cleanTitle(rawTitle);
+
+            if (dedup) {
+                var slug = dramaSlug(fullUrl);
+                if (seen[slug]) continue;
+                seen[slug] = true;
+                // Redirect episode URL to drama page
+                fullUrl = slug.startsWith('http') ? slug : BASE + slug;
+            }
+
+            items.push(new MultimediaItem({
                 title:     title,
-                url:       href.startsWith('http') ? href : BASE + href,
+                url:       fullUrl,
                 posterUrl: posters[i] || '',
                 type:      'series'
-            });
-        }).filter(Boolean);
+            }));
+        }
+        return items;
     }
 
     // ─── getHome ──────────────────────────────────────────────────────────────
@@ -142,9 +173,10 @@
             var result = {};
             for (var i = 0; i < HOME_CATEGORIES.length; i++) {
                 var cat = HOME_CATEGORIES[i];
+                var isEpFeed = cat.name.startsWith('Recent');
                 try {
                     var html  = getBody(await http_get(cat.url, HEADERS));
-                    var items = await parseCards(html);
+                    var items = await parseCards(html, isEpFeed);
                     if (items.length) result[cat.name] = items;
                 } catch (_) {}
             }
@@ -159,7 +191,7 @@
     async function search(query, cb) {
         try {
             var html  = getBody(await http_get(BASE + '/?s=' + encodeURIComponent(query), HEADERS));
-            var items = await parseCards(html);
+            var items = await parseCards(html, false);
             cb({ success: true, data: items });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -170,9 +202,9 @@
         try {
             var html = getBody(await http_get(url, HEADERS));
 
-            var title   = decodeHtmlEntities((await parseHtml(html, '#drama-details .drama-details h1', 'text'))[0] || '');
-            var poster  = (await parseHtml(html, '#drama-details .drama-thumbnail img', 'data-original'))[0]
-                       || (await parseHtml(html, '#drama-details .drama-thumbnail img', 'src'))[0] || '';
+            var title    = decodeHtmlEntities((await parseHtml(html, '#drama-details .drama-details h1', 'text'))[0] || '');
+            var poster   = (await parseHtml(html, '#drama-details .drama-thumbnail img', 'data-original'))[0]
+                        || (await parseHtml(html, '#drama-details .drama-thumbnail img', 'src'))[0] || '';
             var synParts = await parseHtml(html, '#drama-details .synopsis p', 'text');
             var synopsis = synParts.filter(Boolean).join('\n\n').trim();
             var status   = /ongoing/i.test(html) ? 'ongoing' : 'completed';
@@ -180,7 +212,6 @@
             var epHrefs  = await parseHtml(html, '#episode-list ul.list li h3 a', 'href');
             var epTitles = await parseHtml(html, '#episode-list ul.list li h3 a', 'text');
 
-            // Episodes are listed newest-first; reverse to chronological
             epHrefs  = epHrefs.slice().reverse();
             epTitles = epTitles.slice().reverse();
 
@@ -200,13 +231,8 @@
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title,
-                    url,
-                    posterUrl:   poster,
-                    type:        'series',
-                    status,
-                    description: synopsis,
-                    episodes
+                    title, url, posterUrl: poster, type: 'series',
+                    status, description: synopsis, episodes
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
@@ -218,21 +244,15 @@
         try {
             var html = getBody(await http_get(url, HEADERS));
 
-            // Primary iframe src
-            var primarySrcs = await parseHtml(html, '#video-frame', 'src');
-            var primarySrc  = primarySrcs[0] || '';
+            var primarySrc   = (await parseHtml(html, '#video-frame', 'src'))[0] || '';
+            var serverSrcs   = await parseHtml(html, '.server-btn[data-src]', 'data-src');
+            var serverLabels = await parseHtml(html, '.server-btn[data-src]', 'text');
 
-            // All server buttons via data-src attribute
-            var serverSrcs    = await parseHtml(html, '.server-btn[data-src]', 'data-src');
-            var serverLabels  = await parseHtml(html, '.server-btn[data-src]', 'text');
-
-            // Build unique embed list: primary first, then additional servers
             var embeds = [];
             if (primarySrc) embeds.push({ src: primarySrc, label: 'Fast Server' });
             serverSrcs.forEach(function (src, i) {
-                if (src && src !== primarySrc) {
+                if (src && src !== primarySrc)
                     embeds.push({ src: src, label: (serverLabels[i] || 'Server ' + (i + 1)).trim() });
-                }
             });
 
             if (!embeds.length)
@@ -255,9 +275,9 @@
 
     // ─── Expose ───────────────────────────────────────────────────────────────
 
-    globalThis.getHome     = getHome;
-    globalThis.search      = search;
-    globalThis.load        = load;
-    globalThis.loadStreams  = loadStreams;
+    globalThis.getHome    = getHome;
+    globalThis.search     = search;
+    globalThis.load       = load;
+    globalThis.loadStreams = loadStreams;
 
 })();
