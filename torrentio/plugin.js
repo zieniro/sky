@@ -6,8 +6,8 @@
     var ANILIST_API = 'https://graphql.anilist.co';
     var ANI_ZIP     = 'https://api.ani.zip/mappings';
     var MEDIA_LIMIT = 20;
+    var MIN_SEEDERS = 5; // streams with fewer seeders are deprioritized (moved to end, not removed)
 
-    // Best public trackers (static fallback — same source as TorraStream.kt TRACKER_LIST_URL)
     var TRACKERS = [
         'udp://tracker.opentrackr.org:1337/announce',
         'udp://open.stealth.si:80/announce',
@@ -52,7 +52,11 @@
         return parseJSON(res);
     }
 
-    // Parses stream.title into a clean label: "Torrentio | 1080p | WEB-DL | 👤 50 | ⚙️ 1337x"
+    function extractSeeders(title) {
+        var m = (title || '').match(/👤\s*(\d+)/);
+        return m ? parseInt(m[1], 10) : 0;
+    }
+
     function buildStreamLabel(title, name) {
         if (!title) return name || 'Torrentio';
         var tags     = (title.match(/(2160p|1080p|720p|480p|WEBRip|WEB-DL|BluRay|HDRip|DVDRip|x265|x264|XviD|DivX|10bit|HEVC|H264|HDR|DV|REMUX|PROPER)/gi) || [])
@@ -80,9 +84,24 @@
         return (title.match(/(2160p|1080p|720p|480p)/i) || [])[1] || 'Unknown';
     }
 
-    // ─── isAnimeProvider ──────────────────────────────────────────────────────
-    // manifest.baseUrl is auto-injected per provider (Option A).
-    // We detect which provider is active by checking if the baseUrl contains anime-specific params.
+    // Sort streams: high seeders first, then by quality tier, zero-seeder last
+    function sortStreams(streams, seedersMap) {
+        var qualityOrder = { '2160p': 4, '1080p': 3, '720p': 2, '480p': 1 };
+        return streams.slice().sort(function(a, b) {
+            var sa = seedersMap[a.url] || 0;
+            var sb = seedersMap[b.url] || 0;
+            // Zero-seeder streams always go last
+            if (sa === 0 && sb > 0) return 1;
+            if (sb === 0 && sa > 0) return -1;
+            // Sort by seeders descending
+            if (sb !== sa) return sb - sa;
+            // Tiebreak by quality
+            var qa = qualityOrder[(a.quality || '').toLowerCase()] || 0;
+            var qb = qualityOrder[(b.quality || '').toLowerCase()] || 0;
+            return qb - qa;
+        });
+    }
+
     var isAnimeProvider = manifest.baseUrl.indexOf('nyaasi') !== -1;
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -287,30 +306,35 @@
             if (!res || !res.streams || !res.streams.length)
                 return cb({ success: false, error: 'Tidak ada stream ditemukan di Torrentio untuk konten ini.' });
 
-            var streams = [];
+            var streams    = [];
+            var seedersMap = {};
+
             res.streams.forEach(function(s) {
-                var source  = buildStreamLabel(s.title || '', s.name || '');
-                var quality = getQuality(s.title || s.name || '');
+                var source   = buildStreamLabel(s.title || '', s.name || '');
+                var quality  = getQuality(s.title || s.name || '');
+                var seeders  = extractSeeders(s.title || '');
+                var streamUrl;
 
                 if (s.infoHash) {
-                    streams.push(new StreamResult({
-                        url:     buildMagnet(s.infoHash, s.name),
-                        quality: quality,
-                        source:  source,
-                        headers: {}
-                    }));
+                    streamUrl = buildMagnet(s.infoHash, s.name);
                 } else if (s.url) {
-                    streams.push(new StreamResult({
-                        url:     s.url,
-                        quality: quality,
-                        source:  source,
-                        headers: {}
-                    }));
+                    streamUrl = s.url;
+                } else {
+                    return;
                 }
+
+                streams.push(new StreamResult({
+                    url:     streamUrl,
+                    quality: quality,
+                    source:  source,
+                    headers: {}
+                }));
+                seedersMap[streamUrl] = seeders;
             });
 
             if (!streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
-            cb({ success: true, data: streams });
+
+            cb({ success: true, data: sortStreams(streams, seedersMap) });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
@@ -469,36 +493,39 @@
             if (!res || !res.streams || !res.streams.length)
                 return cb({ success: false, error: 'Tidak ada stream ditemukan.' });
 
-            var streams = [];
+            var streams    = [];
+            var seedersMap = {};
+
             res.streams.forEach(function(s) {
-                var source  = buildStreamLabel(s.title || '', s.name || '');
-                var quality = getQuality(s.title || s.name || '');
+                var source   = buildStreamLabel(s.title || '', s.name || '');
+                var quality  = getQuality(s.title || s.name || '');
+                var seeders  = extractSeeders(s.title || '');
+                var streamUrl;
 
                 if (s.infoHash) {
-                    streams.push(new StreamResult({
-                        url:     buildMagnet(s.infoHash, s.name),
-                        quality: quality,
-                        source:  source,
-                        headers: {}
-                    }));
+                    streamUrl = buildMagnet(s.infoHash, s.name);
                 } else if (s.url) {
-                    streams.push(new StreamResult({
-                        url:     s.url,
-                        quality: quality,
-                        source:  source,
-                        headers: {}
-                    }));
+                    streamUrl = s.url;
+                } else {
+                    return;
                 }
+
+                streams.push(new StreamResult({
+                    url:     streamUrl,
+                    quality: quality,
+                    source:  source,
+                    headers: {}
+                }));
+                seedersMap[streamUrl] = seeders;
             });
 
             if (!streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
-            cb({ success: true, data: streams });
+
+            cb({ success: true, data: sortStreams(streams, seedersMap) });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
     // ─── Router ───────────────────────────────────────────────────────────────
-    // manifest.baseUrl is auto-injected by the app per active provider (Option A).
-    // No need to check manifest.providerId — we detect by baseUrl content.
     async function getHome(cb) {
         return isAnimeProvider ? torrentioAnimeGetHome(cb) : torrentioGetHome(cb);
     }
