@@ -21,7 +21,7 @@ jobs:
       - name: Deploy Repository
         run: |
           npm install -g skystream-cli
-          skystream deploy -u https://raw.githubusercontent.com/${{ github.repository }}/main
+          skystream deploy -u https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}
       - name: Commit and Push changes
         run: |
           git config --global user.name "github-actions[bot]"

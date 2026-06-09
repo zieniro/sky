@@ -101,7 +101,7 @@
   {
     "packageName": "com.arranoust.torrentio",
     "name": "Torrentio",
-    "version": 1,
+    "version": 2,
     "baseUrl": "https://torrentio.strem.fun",
     "description": "Torrentio - Movies, Series & Anime via Torrent",
     "authors": [
