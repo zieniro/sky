@@ -41,6 +41,24 @@
     "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.anizone.sky"
   },
   {
+    "packageName": "com.arranoust.idlix",
+    "name": "Idlix",
+    "version": 1,
+    "baseUrl": "https://z2.idlixku.com",
+    "description": "Idlix - Nonton Film & Series Subtitle Indonesia",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Movies",
+      "Series"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.idlix.sky"
+  },
+  {
     "packageName": "com.arranoust.layarkaca",
     "name": "LayarKaca",
     "version": 3,
