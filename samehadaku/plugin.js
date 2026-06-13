@@ -1,338 +1,341 @@
 (function () {
 
-    // ─── Config ───────────────────────────────────────────────────────────────
-    var manifest = { baseUrl: 'https://www.sankavollerei.com' };
-
-    var MAX_RPM          = 45;
-    var MIN_INTERVAL     = Math.ceil(60000 / MAX_RPM);
-    var CACHE_TTL        = 5 * 60000;
-    var STREAM_CACHE_TTL = 30 * 1000; // short TTL for signed/rotating CDN URLs
-    var MAX_STREAMS      = 3;
-
-    var HEADERS = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept':     'application/json'
+    var BASE_HEADERS = {
+        'User-Agent': 'okhttp/4.12.0'
     };
 
-    var HOME_CATEGORIES = [
-        { key: 'Terbaru',   path: '/anime/samehadaku/recent'    },
-        { key: 'Ongoing',   path: '/anime/samehadaku/ongoing'   },
-        { key: 'Completed', path: '/anime/samehadaku/completed' },
-        { key: 'Movies',    path: '/anime/samehadaku/movies'    }
-    ];
+    var AJAX_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': manifest.baseUrl + '/'
+    };
 
-    // ─── Rate Limiter ─────────────────────────────────────────────────────────
-    var _queue       = [];
-    var _running     = false;
-    var _lastReqTime = 0;
-    var _reqCount    = 0;
-    var _windowStart = Date.now();
-
-    function _resetWindow() {
-        var now = Date.now();
-        if (now - _windowStart >= 60000) { _reqCount = 0; _windowStart = now; }
+    function fixUrl(url) {
+        if (!url) return null;
+        if (url.startsWith('//')) return 'https:' + url;
+        if (url.startsWith('/')) return manifest.baseUrl + url;
+        return url;
     }
 
-    function _scheduleNext() {
-        if (_running || !_queue.length) return;
-        _running = true;
-        var task = _queue.shift();
-        _resetWindow();
-
-        if (_reqCount >= MAX_RPM) {
-            var wait = 60000 - (Date.now() - _windowStart) + 50;
-            return setTimeout(function () {
-                _running = false;
-                _queue.unshift(task);
-                _scheduleNext();
-            }, wait);
-        }
-
-        var delay = Math.max(0, MIN_INTERVAL - (Date.now() - _lastReqTime)) + Math.floor(Math.random() * 200);
-        setTimeout(function () {
-            _lastReqTime = Date.now();
-            _reqCount++;
-            task.fn()
-                .then(task.resolve)
-                .catch(task.reject)
-                .finally(function () { _running = false; _scheduleNext(); });
-        }, delay);
+    function getStatus(t) {
+        var s = (t || '').toLowerCase();
+        return (s.includes('complet') || s.includes('finished')) ? 'completed' : 'ongoing';
     }
 
-    // ─── Cache ────────────────────────────────────────────────────────────────
-    var _cache = {};
-
-    function _cacheGet(url, ttl) {
-        var entry = _cache[url];
-        if (!entry || Date.now() - entry.ts > (ttl || CACHE_TTL)) {
-            delete _cache[url];
-            return null;
-        }
-        return entry.val;
+    function fixQuality(label) {
+        var u = (label || '').toUpperCase();
+        if (u.includes('4K')) return '2160p';
+        if (u.includes('1080') || u.includes('FULLHD')) return '1080p';
+        if (u.includes('720') || u.includes('MP4HD')) return '720p';
+        if (u.includes('480')) return '480p';
+        if (u.includes('360')) return '360p';
+        return label || 'Auto';
     }
 
-    function _cachePut(url, val) {
-        _cache[url] = { val: val, ts: Date.now() };
-        var keys = Object.keys(_cache);
-        if (keys.length > 200) {
-            delete _cache[keys.sort(function (a, b) { return _cache[a].ts - _cache[b].ts; })[0]];
-        }
-    }
+    // ── Resolvers ──
 
-    function rateLimitedGet(url, hdrs, ttl) {
-        var cached = _cacheGet(url, ttl);
-        if (cached !== null) return Promise.resolve(cached);
-        return new Promise(function (resolve, reject) {
-            _queue.push({
-                fn: function () {
-                    return Promise.resolve(http_get(url, hdrs || HEADERS)).then(function (res) {
-                        _cachePut(url, res);
-                        return res;
-                    });
-                },
-                resolve: resolve,
-                reject:  reject
-            });
-            _scheduleNext();
+    async function resolveFiledon(embedUrl) {
+        var slug = embedUrl.split('/embed/').pop().split(/[/?]/)[0];
+        if (!slug) return null;
+        var res = await http_get('https://filedon.co/embed/' + slug, {
+            'User-Agent': BASE_HEADERS['User-Agent'],
+            'Referer': manifest.baseUrl + '/'
         });
+        var pageMatch = res.body.match(/id="app"\s+data-page="([^"]+)"/);
+        if (!pageMatch) return null;
+        var json = JSON.parse(pageMatch[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+        var url = json?.props?.url || json?.url || null;
+        if (url && url.startsWith('/')) url = 'https://filedon.co' + url;
+        return url;
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-    function parseJSON(res) {
-        try {
-            return typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
-        } catch (e) {
-            throw new Error('Failed to parse JSON: ' + String(e));
-        }
-    }
+    // ── AniList / AniZip ──
 
-    function toItem(item) {
-        return new MultimediaItem({
-            title:     String(item.title || 'No Title'),
-            url:       manifest.baseUrl + '/anime/samehadaku/anime/' + item.animeId,
-            posterUrl: String(item.poster || ''),
-            type:      'anime'
-        });
-    }
-
-    // ─── AniList ──────────────────────────────────────────────────────────────
     async function getAniListData(title) {
         if (!title) return null;
         var query = 'query($s:String){Media(search:$s,type:ANIME){idMal characters(sort:ROLE,perPage:15){edges{role node{name{full native}image{large medium}}}}}}';
         try {
-            var res  = await http_post('https://graphql.anilist.co',
+            var res = await http_post('https://graphql.anilist.co',
                 { 'Content-Type': 'application/json', Accept: 'application/json' },
                 JSON.stringify({ query: query, variables: { s: title } })
             );
-            var data  = typeof res?.body === 'string' ? JSON.parse(res.body) : res?.body;
+            var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
             var media = data?.data?.Media;
             if (!media) return null;
             return { idMal: media.idMal ? String(media.idMal) : null, characters: media.characters?.edges ?? [] };
         } catch (_) { return null; }
     }
 
-    // ─── AniZip ───────────────────────────────────────────────────────────────
     async function getAniZipByMalId(malId) {
         if (!malId) return null;
         try {
-            var res  = await http_get('https://api.ani.zip/mappings?mal_id=' + malId,
+            var res = await http_get('https://api.ani.zip/mappings?mal_id=' + malId,
                 { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' });
-            var data = typeof res?.body === 'string' ? JSON.parse(res.body) : res?.body;
+            var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
             return data?.episodes ? data : null;
         } catch (_) { return null; }
     }
 
-    // ─── Blogger resolver ─────────────────────────────────────────────────────
-    async function resolveBlogger(embedUrl) {
-        try {
-            var res   = await rateLimitedGet(embedUrl, { 'User-Agent': 'Mozilla/5.0' });
-            var match = res.body.match(/"play_url"\s*:\s*"([^"]+)"/)
-                     || res.body.match(/"iurl"\s*:\s*"([^"]+)"/);
-            if (!match) return null;
-            return match[1]
-                .replace(/\\u003d/g, '=')
-                .replace(/\\u0026/g, '&')
-                .replace(/\\\//g, '/');
-        } catch (_) { return null; }
-    }
+    // ── getHome ──
 
-    // ─── getHome ──────────────────────────────────────────────────────────────
+    var HOME_PAGES = [
+        { key: 'New Episodes',    path: '/anime-terbaru/',                                        latest: true  },
+        { key: 'Ongoing Anime',   path: '/daftar-anime-2/?status=Currently+Airing&order=latest', latest: false },
+        { key: 'Completed Anime', path: '/daftar-anime-2/?status=Finished+Airing&order=latest',  latest: false },
+        { key: 'Movies',          path: '/daftar-anime-2/?type=Movie&order=latest',               latest: false }
+    ];
+
     async function getHome(cb) {
         try {
-            var results = await Promise.all(HOME_CATEGORIES.map(async function (cat) {
+            var results = await Promise.all(HOME_PAGES.map(async function (cat) {
                 try {
-                    var res  = await rateLimitedGet(manifest.baseUrl + cat.path);
-                    var json = parseJSON(res);
-                    var list = (json?.data?.animeList ?? []).map(toItem);
-                    return { key: cat.key, list: list };
+                    var res = await http_get(manifest.baseUrl + cat.path, BASE_HEADERS);
+                    var items = [];
+
+                    if (cat.latest) {
+                        var links   = await parse_html(res.body, 'div.thumb a', 'href');
+                        var titles  = await parse_html(res.body, 'div.thumb a', 'title');
+                        var posters = await parse_html(res.body, 'div.thumb img', 'src');
+                        for (var i = 0; i < links.length; i++) {
+                            var href = links[i]?.attr;
+                            if (!href) continue;
+                            items.push(new MultimediaItem({
+                                title:     titles[i]?.attr || 'Anime',
+                                url:       fixUrl(href),
+                                posterUrl: fixUrl(posters[i]?.attr || ''),
+                                type:      'anime'
+                            }));
+                        }
+                    } else {
+                        var links    = await parse_html(res.body, 'div.animposx > a', 'href');
+                        var titles   = await parse_html(res.body, 'div.animposx .data .title h2', 'text');
+                        var posters  = await parse_html(res.body, 'div.animposx img', 'src');
+                        var statuses = await parse_html(res.body, 'div.animposx .data .type', 'text');
+                        for (var i = 0; i < links.length; i++) {
+                            var href  = links[i]?.attr;
+                            var title = titles[i]?.text?.trim();
+                            if (!href || !title) continue;
+                            var rawStatus = (statuses[i]?.text || '').trim().toLowerCase();
+                            var status = rawStatus.includes('complet') || rawStatus.includes('end') ? 'completed' : 'ongoing';
+                            items.push(new MultimediaItem({
+                                title:     title,
+                                url:       fixUrl(href),
+                                posterUrl: fixUrl(posters[i]?.attr || ''),
+                                type:      'anime',
+                                status:    status
+                            }));
+                        }
+                    }
+
+                    return { key: cat.key, list: items };
                 } catch (_) { return { key: cat.key, list: [] }; }
             }));
 
             var data = {};
             results.forEach(function (r) { if (r.list.length) data[r.key] = r.list; });
-
-            if (!Object.keys(data).length)
-                return cb({ success: false, error: 'No data from API.' });
+            if (!Object.keys(data).length) return cb({ success: false, error: 'No data scraped.' });
             cb({ success: true, data: data });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─── search ───────────────────────────────────────────────────────────────
+    // ── search ──
+
     async function search(query, cb) {
         try {
-            var res   = await rateLimitedGet(manifest.baseUrl + '/anime/samehadaku/search?q=' + encodeURIComponent(query));
-            var json  = parseJSON(res);
-            var items = (json?.data?.animeList ?? []).map(toItem);
+            var res     = await http_get(manifest.baseUrl + '/?s=' + encodeURIComponent(query), BASE_HEADERS);
+            var links   = await parse_html(res.body, 'div.animposx > a', 'href');
+            var titles  = await parse_html(res.body, 'div.animposx .data .title h2', 'text');
+            var posters = await parse_html(res.body, 'div.animposx img', 'src');
+            var items = [];
+            for (var i = 0; i < links.length; i++) {
+                var href  = links[i]?.attr;
+                var title = titles[i]?.text?.trim();
+                if (!href || !title) continue;
+                items.push(new MultimediaItem({
+                    title:     title,
+                    url:       fixUrl(href),
+                    posterUrl: fixUrl(posters[i]?.attr || ''),
+                    type:      'anime'
+                }));
+            }
             cb({ success: true, data: items });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─── load ─────────────────────────────────────────────────────────────────
+    // ── load ──
+
     async function load(url, cb) {
         try {
-            var res   = await rateLimitedGet(url);
-            var json  = parseJSON(res);
-            var anime = json.data || {};
+            var res  = await http_get(url, BASE_HEADERS);
+            var body = res.body;
 
-            var animeTitle = String(anime.title || anime.name || '').trim();
-            if (!animeTitle) {
-                var slug = url.split('/').filter(Boolean).pop() || 'Anime';
-                animeTitle = slug.replace(/-/g, ' ').toUpperCase();
+            if (!url.includes('/anime/') || url.match(/episode/)) {
+                var animeLinks = await parse_html(body, '.nvs.nvsc a', 'href');
+                if (animeLinks[0]?.attr) {
+                    url  = fixUrl(animeLinks[0].attr);
+                    res  = await http_get(url, BASE_HEADERS);
+                    body = res.body;
+                }
             }
 
-            var synopsis    = anime.synopsis?.paragraphs?.join('\n\n') ?? '';
-            var animePoster = String(anime.poster || '');
-            var episodeList = anime.episodeList || [];
+            var titleArr   = await parse_html(body, 'h1.entry-title', 'text');
+            var posterArr  = await parse_html(body, 'div.thumb img', 'src');
+            var descArr    = await parse_html(body, 'div.desc', 'text');
+            var tagArr     = await parse_html(body, 'div.genre-info a', 'text');
+            var trailerArr = await parse_html(body, 'div.trailer-anime iframe', 'src');
 
-            var searchTitles = [anime.english, animeTitle, anime.japanese].filter(function (t) {
-                return t && String(t).trim();
-            }).map(String);
+            var animeTitle = (titleArr[0]?.text || 'Anime')
+                .replace(/nonton|anime|subtitle\s+indonesia|sub\s+indo|lengkap|batch/gi, '').trim();
 
-            var aniListData = null;
-            var aniZip      = null;
-            for (var i = 0; i < searchTitles.length; i++) {
-                aniListData = await getAniListData(searchTitles[i]);
-                if (aniListData?.idMal) break;
-            }
-            if (aniListData?.idMal) aniZip = await getAniZipByMalId(aniListData.idMal);
+            var statusMatch = body.match(/Status[^:]*:\s*<[^>]+>([^<]+)</i);
+            var yearMatch   = body.match(/Rilis[^<]*<\/[^>]+>[\s\S]*?,\s*(\d{4})/i);
+            var scoreMatch = body.match(/itemprop="ratingValue"[^>]*>([^<]+)</i);
 
-            var cast = (aniListData?.characters ?? []).map(function (edge) {
+            var recLinks   = await parse_html(body, 'div.rand-animesu a.series', 'href');
+            var recTitles  = await parse_html(body, 'div.rand-animesu .judul', 'text');
+            var recPosters = await parse_html(body, 'div.rand-animesu img', 'src');
+            var recommendations = recLinks.map(function(h, i) {
+                if (!h?.attr || !recTitles[i]?.text) return null;
+                return new MultimediaItem({ title: recTitles[i].text.trim(), url: fixUrl(h.attr), posterUrl: fixUrl(recPosters[i]?.attr || ''), type: 'anime' });
+            }).filter(Boolean);
+
+            var epHrefs = await parse_html(body, '.epsleft .lchx a', 'href');
+            var epNums  = await parse_html(body, '.epsright .eps a', 'text');
+
+            var [aniListData] = await Promise.all([getAniListData(animeTitle)]);
+            var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
+
+            var cast = (aniListData?.characters ?? []).map(function(edge) {
                 var node = edge.node;
                 if (!node) return null;
-                return new Actor({
-                    name:  node.name?.full || node.name?.native || 'Unknown',
-                    role:  edge.role || 'SUPPORTING',
-                    image: node.image?.large || node.image?.medium || ''
-                });
+                return new Actor({ name: node.name?.full || 'Unknown', role: edge.role || 'SUPPORTING', image: node.image?.large || '' });
             }).filter(Boolean);
 
             var resolvedTitle = aniZip?.titles?.en || aniZip?.titles?.['x-jat'] || aniZip?.titles?.ja || animeTitle;
-            var rawStatus     = String(anime.status || '').toLowerCase();
-            var status        = (rawStatus.includes('complet') || rawStatus.includes('tamat')) ? 'completed' : 'ongoing';
-            var score         = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
+            var animePoster   = fixUrl(posterArr[0]?.attr || '');
 
-            var episodes = episodeList.slice().reverse().map(function (ep, index) {
-                var epNum    = parseFloat(ep.title) || (index + 1);
-                var aniEp    = aniZip?.episodes?.[String(ep.title)] || aniZip?.episodes?.[String(Math.floor(epNum))] || null;
+            var aniNextAiring = aniListData?.nextAiringEpisode;
+            var nextAiringObj = null;
 
-                var epName   = aniEp?.title?.en || aniEp?.title?.['x-jat'] || aniEp?.title?.ja || ('Episode ' + ep.title);
-                var epPoster = aniEp?.image || (ep.poster ? String(ep.poster) : animePoster);
-                var epDesc   = aniEp?.overview ? String(aniEp.overview) : '';
-
-                return new Episode({
-                    name:        epName,
-                    url:         manifest.baseUrl + '/anime/samehadaku/episode/' + ep.episodeId,
-                    season:      1,
-                    episode:     epNum,
-                    dubStatus:   'subbed',
-                    posterUrl:   epPoster,
-                    description: epDesc,
-                    runtime:     aniEp?.runtime || undefined
+            if (aniNextAiring) {
+                nextAiringObj = new NextAiring({
+                    episode:  parseInt(aniNextAiring.episode),
+                    season:   1, 
+                    unixTime: aniNextAiring.airingAt 
                 });
+            }
+
+            var episodes = epHrefs.map(function(href, i) {
+            if (!href?.attr) return null;
+            var epNum = parseInt(epNums[i]?.text) || (i + 1);
+            var aniEp = aniZip?.episodes?.[String(epNum)] || null;
+            return new Episode({
+                name:        aniEp?.title?.en || aniEp?.title?.['x-jat'] || ('Episode ' + epNum),
+                url:         fixUrl(href.attr),
+                season:      1,
+                episode:     epNum,
+                dubStatus:   'subbed',
+                posterUrl:   aniEp?.image || animePoster,
+                description: aniEp?.overview || '',
+                runtime:     aniEp?.runtime || undefined,
+                score:       aniEp?.score || undefined,
+                airDate:     aniEp?.airDateUtc ? aniEp.airDateUtc.substring(0, 10) : undefined
             });
+        }).filter(Boolean).reverse();
 
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:       resolvedTitle,
-                    url:         url,
-                    posterUrl:   animePoster,
-                    type:        'anime',
-                    status:      status,
-                    score:       score,
-                    description: synopsis,
-                    cast:        cast,
-                    episodes:    episodes
+                    title:           resolvedTitle,
+                    url:             url,
+                    posterUrl:       animePoster,
+                    type:            'anime',
+                    status:          getStatus(statusMatch ? statusMatch[1] : ''),
+                    year:            yearMatch ? parseInt(yearMatch[1]) : undefined,
+                    score:           scoreMatch ? parseFloat(scoreMatch[1]) || undefined : undefined,
+                    description:     (descArr[0]?.text || '').replace(/\s+/g, ' ').trim(),
+                    cast:            cast,
+                    trailers:        trailerArr[0]?.attr ? [new Trailer({ url: trailerArr[0].attr })] : [],
+                    tags:            tagArr.map(function(t) { return t?.text; }).filter(Boolean),
+                    recommendations: recommendations,
+                    episodes:        episodes,
+                    syncData:        aniListData?.idMal ? { mal: aniListData.idMal } : undefined
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─── loadStreams ───────────────────────────────────────────────────────────
+    // ── loadStreams ──
+
     async function loadStreams(url, cb) {
         try {
-            // Use short TTL so rotating/signed CDN URLs aren't served stale
-            var res    = await rateLimitedGet(url, HEADERS, STREAM_CACHE_TTL);
-            var json   = parseJSON(res);
-            var epData = json.data || {};
-            var streams = [];
+            var res  = await http_get(url, BASE_HEADERS);
+            var body = res.body;
 
-            var qualities = epData.server?.qualities ?? [];
-
-            outer:
-            for (var qi = 0; qi < qualities.length; qi++) {
-                var q = qualities[qi];
-                if (!q.title || String(q.title).toLowerCase() === 'unknown') continue;
-
-                for (var si = 0; si < (q.serverList || []).length; si++) {
-                    var srv = q.serverList[si];
-                    if (!srv.href) continue;
-
-                    try {
-                        var srvRes    = await rateLimitedGet(manifest.baseUrl + '/anime' + srv.href, HEADERS, STREAM_CACHE_TTL);
-                        var srvJson   = parseJSON(srvRes);
-                        var streamUrl = String(srvJson.data?.url || '').trim();
-                        if (!streamUrl) continue;
-
-                        var serverName = String(srv.title || '').toLowerCase();
-                        var resolved   = null;
-
-                        if (streamUrl.includes('blogger.com/video') || serverName.includes('blogger') || serverName.includes('blogpost')) {
-                            resolved = await resolveBlogger(streamUrl);
-                            if (resolved) streamUrl = resolved;
-                            else continue;
-                        } else if (streamUrl.includes('pixeldrain.com/u/') || serverName.includes('pixeldrain')) {
-                            streamUrl = streamUrl.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/');
-                        } else if (!streamUrl.includes('wibufile.com') && !serverName.includes('wibufile')) {
-                            continue; // skip unsupported hosts
-                        }
-
-                        streams.push(new StreamResult({
-                            url:     streamUrl,
-                            source:  String(srv.title || 'Server'),
-                            headers: {
-                                Referer:      'https://v2.samehadaku.how/',
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-                            }
-                        }));
-                        break;
-                    } catch (_) { continue; }
-                }
-
-                if (streams.length >= MAX_STREAMS) break outer;
+            var buttons = [];
+            var btnRegex = /data-post="(\d+)"[^>]*data-nume="([^"]+)"[^>]*data-type="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>([^<]*)<\/span>/gi;
+            var m;
+            while ((m = btnRegex.exec(body)) !== null) {
+                buttons.push({ post: m[1], nume: m[2], type: m[3], label: m[4].trim() });
             }
+            if (!buttons.length) return cb({ success: false, error: 'No stream buttons found.' });
 
-            if (!streams.length)
-                return cb({ success: false, error: 'No playable streams found (Blogger/Wibufile/Pixeldrain).' });
+            var streams = await Promise.all(buttons.map(async function (btn) {
+                try {
+                    var ajaxRes = await http_post(
+                        manifest.baseUrl + '/wp-admin/admin-ajax.php',
+                        AJAX_HEADERS,
+                        'action=player_ajax&post=' + btn.post + '&nume=' + encodeURIComponent(btn.nume) + '&type=' + encodeURIComponent(btn.type)
+                    );
+                    var embedContent = ajaxRes.body;
+                    try {
+                        var parsed = typeof ajaxRes.body === 'string' ? JSON.parse(ajaxRes.body) : ajaxRes.body;
+                        if (parsed.embed) embedContent = parsed.embed;
+                    } catch (_) {}
 
-            cb({ success: true, data: streams });
+                    var srcMatch = embedContent.match(/src=["']([^"']+)["']/i);
+                    if (!srcMatch) return null;
+                    return resolveStream(srcMatch[1].replace(/&amp;/g, '&'), btn.label);
+                } catch (_) { return null; }
+            }));
+
+            var flat = [];
+            streams.forEach(function (r) {
+                if (!r) return;
+                if (Array.isArray(r)) flat.push.apply(flat, r);
+                else flat.push(r);
+            });
+
+            if (!flat.length) return cb({ success: false, error: 'No playable streams found.' });
+            cb({ success: true, data: flat });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─── Expose ───────────────────────────────────────────────────────────────
-    globalThis.getHome     = getHome;
-    globalThis.search      = search;
-    globalThis.load        = load;
-    globalThis.loadStreams  = loadStreams;
+    async function resolveStream(iframeUrl, label) {
+        if (iframeUrl.startsWith('/embed/')) iframeUrl = 'https://filedon.co' + iframeUrl;
+
+        if (iframeUrl.includes('filedon.co/embed/')) {
+            var videoUrl = await resolveFiledon(iframeUrl);
+            if (!videoUrl) return null;
+            return new StreamResult({ url: videoUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://filedon.co/' } });
+        }
+        if (iframeUrl.includes('api.wibufile.com/embed/')) {
+            var res = await http_get(iframeUrl, { 'Referer': 'https://wibufile.com/', 'User-Agent': BASE_HEADERS['User-Agent'] });
+            var mp4Match = res.body.match(/["']file["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+\.mp4[^"']*)['"]/i);
+            if (!mp4Match) return null;
+            var mp4Url = mp4Match[1].replace(/\\\//g, '/');
+            return new StreamResult({ url: mp4Url, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://wibufile.com/' } });
+        }
+        if (iframeUrl.includes('wibufile.com')) {
+            return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://wibufile.com/' } });
+        }
+        return null;
+    }
+
+    globalThis.getHome    = getHome;
+    globalThis.search     = search;
+    globalThis.load       = load;
+    globalThis.loadStreams = loadStreams;
 
 })();
