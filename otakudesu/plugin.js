@@ -1,7 +1,6 @@
 (function () {
 
     // ─── Constants ────────────────────────────────────────────────────────────
-    var MAX_STREAMS = 6;
     var UA_LIST = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -474,57 +473,55 @@
 
             if (!nonce) return cb({ success: false, error: 'Gagal mengambil nonce.' });
 
-            var mirrorTask = (async function () {
-                var tasks = dataContents.map(async function (dataContent, i) {
-                    try {
-                        dataContent = (dataContent || '').trim();
-                        if (!dataContent || dataContent === '#') return null;
-
-                        var decoded = safeAtob(dataContent);
-                        if (!decoded) return null;
-
-                        var tokenObj = null;
-                        try { tokenObj = JSON.parse(decoded); } catch (_) { return null; }
-                        if (tokenObj?.id === undefined) return null;
-
-                        var postBody = 'id='     + encodeURIComponent(tokenObj.id)
-                                     + '&i='     + encodeURIComponent(tokenObj.i)
-                                     + '&q='     + encodeURIComponent(tokenObj.q)
-                                     + '&nonce=' + encodeURIComponent(nonce)
-                                     + '&action=2a3505c93b0035d3f455df82bf976b84';
-
-                        var embedRes  = await http_post(ajaxUrl, ajaxHeaders, postBody);
-                        var embedJson = JSON.parse(getBody(embedRes));
-                        if (!embedJson?.data) return null;
-
-                        var iframeHtml = safeAtob(forceString(embedJson.data));
-                        if (!iframeHtml) return null;
-
-                        var embedUrl = iframeHtml.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1]
-                                    || (/^https?:\/\//i.test(iframeHtml.trim()) ? iframeHtml.trim() : '');
-                        if (!embedUrl) return null;
-
-                        var serverName = (serverNames[i] || '').trim().toLowerCase();
-                        var resolved   = await resolveAny(embedUrl, serverName, url);
-                        if (!resolved?.url) return null;
-
-                        return new StreamResult({
-                            url:     resolved.url,
-                            quality: tokenObj.q || undefined,
-                            source:  serverName + (tokenObj.q ? ' | ' + tokenObj.q + '' : ''),
-                            headers: { 'User-Agent': UA, Referer: resolved.referer || url }
-                        });
-                    } catch (_) { return null; }
-                });
-                return (await Promise.all(tasks)).filter(Boolean);
-            })();
-
             var [mirrorStreams, pdStreams] = await Promise.all([
-                mirrorTask,
+                (async function () {
+                    var tasks = dataContents.map(async function (dataContent, i) {
+                        try {
+                            dataContent = (dataContent || '').trim();
+                            if (!dataContent || dataContent === '#') return null;
+
+                            var decoded = safeAtob(dataContent);
+                            if (!decoded) return null;
+
+                            var tokenObj = null;
+                            try { tokenObj = JSON.parse(decoded); } catch (_) { return null; }
+                            if (tokenObj?.id === undefined) return null;
+
+                            var postBody = 'id='     + encodeURIComponent(tokenObj.id)
+                                        + '&i='     + encodeURIComponent(tokenObj.i)
+                                        + '&q='     + encodeURIComponent(tokenObj.q)
+                                        + '&nonce=' + encodeURIComponent(nonce)
+                                        + '&action=2a3505c93b0035d3f455df82bf976b84';
+
+                            var embedRes  = await http_post(ajaxUrl, ajaxHeaders, postBody);
+                            var embedJson = JSON.parse(getBody(embedRes));
+                            if (!embedJson?.data) return null;
+
+                            var iframeHtml = safeAtob(forceString(embedJson.data));
+                            if (!iframeHtml) return null;
+
+                            var embedUrl = iframeHtml.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1]
+                                        || (/^https?:\/\//i.test(iframeHtml.trim()) ? iframeHtml.trim() : '');
+                            if (!embedUrl) return null;
+
+                            var serverName = (serverNames[i] || '').trim().toLowerCase();
+                            var resolved   = await resolveAny(embedUrl, serverName, url);
+                            if (!resolved?.url) return null;
+
+                            return new StreamResult({
+                                url:     resolved.url,
+                                quality: tokenObj.q || undefined,
+                                source:  serverName + (tokenObj.q ? ' | ' + tokenObj.q + '' : ''),
+                                headers: { 'User-Agent': UA, Referer: resolved.referer || url }
+                            });
+                        } catch (_) { return null; }
+                    });
+                    return (await Promise.all(tasks)).filter(Boolean);
+                })(),
                 resolvePixelDrainDownload(url)
             ]);
 
-            var results = [...mirrorStreams, ...pdStreams].slice(0, MAX_STREAMS);
+            var results = [...mirrorStreams, ...pdStreams];
 
             if (!results.length)
                 return cb({ success: false, error: 'Tidak ditemukan link streaming.' });
