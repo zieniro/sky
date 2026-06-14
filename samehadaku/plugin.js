@@ -52,7 +52,7 @@
 
     async function getAniListData(title) {
         if (!title) return null;
-        var query = 'query($s:String){Media(search:$s,type:ANIME){id idMal bannerImage coverImage{extraLarge}nextAiringEpisode{episode timeUntilAiring}characters(sort:ROLE,perPage:15){edges{role node{name{full}image{large}}}}}}';
+        var query = 'query($s:String){Media(search:$s,type:ANIME){id idMal bannerImage nextAiringEpisode{episode timeUntilAiring}characters(sort:ROLE,perPage:15){edges{role node{name{full}image{large}}}}}}';
         try {
             var res = await http_post('https://graphql.anilist.co',
                 { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -67,7 +67,6 @@
                 characters: media.characters?.edges ?? [],
                 nextAiring: media.nextAiringEpisode || null,
                 bannerUrl: media.bannerImage || null,
-                logoUrl: media.coverImage?.extraLarge || null
             };
         } catch (_) { return null; }
     }
@@ -263,7 +262,6 @@
                     episodes:        episodes,
                     syncData:        aniListData?.idMal ? { mal: aniListData.idMal, anilist: aniListData.id } : undefined,
                     bannerUrl: aniListData?.bannerUrl || undefined,
-                    logoUrl:   aniListData?.logoUrl   || undefined,
                     nextAiring: aniListData?.nextAiring ? new NextAiring({
                         episode:  aniListData.nextAiring.episode,
                         season:   1,
@@ -337,13 +335,13 @@
                 var sources = JSON.parse(sourcesMatch[1].replace(/\\\//g, '/'));
                 if (!sources.length) return null;
                 return sources.map(function(s) {
-                    return new StreamResult({ url: s.file, quality: fixQuality(s.label || label), source: label.trim(), headers: { Referer: 'https://api.wibufile.com/' } });
+                    return new StreamResult({ url: s.file, quality: fixQuality(s.label || label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
                 });
             } catch (_) { return null; }
         }
 
         if (iframeUrl.includes('wibufile.com')) {
-            return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://api.wibufile.com/' } });
+            return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
         }
 
         return null;
