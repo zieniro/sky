@@ -1,7 +1,7 @@
 {
   "packageName": "com.arranoust.cineby",
   "name": "Cineby",
-  "version": "1",
+  "version": "2",
   "description": "Stream movies & TV shows from popular sources with multi-quality support and subtitles.",
   "author": "arranoust",
   "baseUrl": "https://cineby.at",
@@ -11,5 +11,5 @@
     { "name": "fmovies.nz",   "url": "https://fmovies.nz" }
   ],
   "language": "en",
-  "types": ["movie", "series"]
+  "types": ["Movies", "Series"]
 }
