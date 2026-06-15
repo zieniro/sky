@@ -47,11 +47,12 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 | :--- | :--- | :--- | :--- |
 | 1 | **AnimeXin** | EN | Donghua |
 | 2 | **Anizone** | EN | Anime |
-| 3 | **Idlix** | ID | Movies & Series |
-| 4 | **LayarKaca** | ID | Movies & Series |
-| 5 | **OtakuDesu** | ID | Anime |
-| 6 | **Samehadaku** | ID | Anime |
-| 7 | **Torrentio** | Global | Torrents |
+| 3 | **Cineby** | EN | Movies & Series |
+| 4 | **Idlix** | ID | Movies & Series |
+| 5 | **LayarKaca** | ID | Movies & Series |
+| 6 | **OtakuDesu** | ID | Anime |
+| 7 | **Samehadaku** | ID | Anime |
+| 8 | **Torrentio** | Global | Torrents |
 
 > [!WARNING]
 > **Disclaimer & Legal Notice**
