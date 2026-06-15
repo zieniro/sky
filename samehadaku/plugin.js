@@ -33,7 +33,7 @@
         return label || 'Auto';
     }
 
-    // ── Resolvers ──
+    // ── Individual resolvers ──
 
     async function resolveFiledon(embedUrl) {
         var slug = embedUrl.split('/embed/').pop().split(/[/?]/)[0];
@@ -42,10 +42,129 @@
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
             'Referer': manifest.baseUrl + '/'
         });
-        var pageMatch = res.body.match(/id="app"\s+data-page="([^"]+)"/);
-        if (!pageMatch) return null;
-        var json = JSON.parse(pageMatch[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+        var m = res.body.match(/id="app"\s+data-page="([^"]+)"/);
+        if (!m) return null;
+        var json = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
         return json?.props?.url || json?.url || null;
+    }
+
+    async function resolvePixelDrain(url) {
+        var m = url.match(/pixeldrain\.com\/(?:u|l)\/([a-zA-Z0-9]+)/);
+        return m ? 'https://pixeldrain.com/api/file/' + m[1] + '?download' : null;
+    }
+
+    async function resolveKrakenFiles(url) {
+        var m = url.match(/krakenfiles\.com\/(?:view|embed-video)\/([a-zA-Z0-9]+)/);
+        if (!m) return null;
+        try {
+            var res = await http_get('https://krakenfiles.com/embed-video/' + m[1], {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+            });
+            var src = res.body.match(/(?:phs|pchs)\d*\.krakencloud\.net\/play\/video\/[^"'\s]+/);
+            return src ? 'https://' + src[0] : null;
+        } catch (_) { return null; }
+    }
+
+    async function resolveWibufile(iframeUrl, label) {
+        var res = await http_get(iframeUrl, {
+            'Referer': manifest.baseUrl + '/',
+            'User-Agent': BASE_HEADERS['User-Agent']
+        });
+        var m = res.body.match(/sources:\s*(\[.*?\])/s);
+        if (!m) return null;
+        try {
+            var sources = JSON.parse(m[1].replace(/\\\//g, '/'));
+            return sources.map(function(s) {
+                return new StreamResult({
+                    url: s.file,
+                    quality: fixQuality(s.label || label),
+                    source: label.trim(),
+                    headers: { Referer: manifest.baseUrl + '/' }
+                });
+            });
+        } catch (_) { return null; }
+    }
+
+    // ── Embed player (online streaming) ──
+
+    async function resolveStream(iframeUrl, label) {
+        if (iframeUrl.startsWith('/embed/')) iframeUrl = 'https://filedon.co' + iframeUrl;
+        if (iframeUrl.includes('filedon.co/embed/')) {
+            var url = await resolveFiledon(iframeUrl);
+            return url ? new StreamResult({ url, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://filedon.co/' } }) : null;
+        }
+        if (iframeUrl.includes('api.wibufile.com/embed/')) return resolveWibufile(iframeUrl, label);
+        if (iframeUrl.includes('wibufile.com')) return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
+        return null;
+    }
+
+    async function resolveEmbedButtons(body) {
+        var buttons = [];
+        var btnRegex = /data-post="(\d+)"[^>]*data-nume="([^"]+)"[^>]*data-type="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>([^<]*)<\/span>/gi;
+        var m;
+        while ((m = btnRegex.exec(body)) !== null)
+            buttons.push({ post: m[1], nume: m[2], type: m[3], label: m[4].trim() });
+        if (!buttons.length) return [];
+
+        var results = await Promise.all(buttons.map(async function(btn) {
+            try {
+                var ajax = await http_post(
+                    manifest.baseUrl + '/wp-admin/admin-ajax.php', AJAX_HEADERS,
+                    'action=player_ajax&post=' + btn.post + '&nume=' + encodeURIComponent(btn.nume) + '&type=' + encodeURIComponent(btn.type)
+                );
+                var embed = ajax.body;
+                try { var p = typeof ajax.body === 'string' ? JSON.parse(ajax.body) : ajax.body; if (p.embed) embed = p.embed; } catch (_) {}
+                var src = embed.match(/src=["']([^"']+)["']/i);
+                return src ? resolveStream(src[1].replace(/&amp;/g, '&'), btn.label) : null;
+            } catch (_) { return null; }
+        }));
+
+        var flat = [];
+        results.forEach(function(r) {
+            if (!r) return;
+            Array.isArray(r) ? flat.push.apply(flat, r) : flat.push(r);
+        });
+        return flat;
+    }
+
+    // ── Download section ──
+
+    var DL_RESOLVERS = [
+        {
+            name: 'PixelDrain',
+            regex: /href="(https:\/\/pixeldrain\.com\/u\/[^"]+)"/i,
+            resolve: resolvePixelDrain,
+            headers: { Referer: 'https://pixeldrain.com/' }
+        },
+        {
+            name: 'KrakenFiles',
+            regex: /href="(https:\/\/krakenfiles\.com\/view\/[^"]+)"/i,
+            resolve: resolveKrakenFiles,
+            headers: { Referer: 'https://krakenfiles.com/' }
+        }
+    ];
+
+    async function resolveDownloadLinks(body) {
+        var streams = [];
+        var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+        var m;
+        while ((m = liRegex.exec(body)) !== null) {
+            var block = m[1];
+            var qMatch = block.match(/<strong>([^<]+?)\s*<\/strong>/i);
+            if (!qMatch) continue;
+            var q = qMatch[1].trim();
+            for (var r of DL_RESOLVERS) {
+                var match = block.match(r.regex);
+                if (!match) continue;
+                var url = await r.resolve(match[1]);
+                if (url) streams.push(new StreamResult({
+                    url, quality: fixQuality(q),
+                    source: r.name + ' ' + fixQuality(q),
+                    headers: r.headers
+                }));
+            }
+        }
+        return streams;
     }
 
     // ── AniList / AniZip ──
@@ -279,72 +398,33 @@
             var res  = await http_get(url, BASE_HEADERS);
             var body = res.body;
 
-            var buttons = [];
-            var btnRegex = /data-post="(\d+)"[^>]*data-nume="([^"]+)"[^>]*data-type="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>([^<]*)<\/span>/gi;
-            var m;
-            while ((m = btnRegex.exec(body)) !== null) {
-                buttons.push({ post: m[1], nume: m[2], type: m[3], label: m[4].trim() });
-            }
-            if (!buttons.length) return cb({ success: false, error: 'No stream buttons found.' });
+            var [embedStreams, dlStreams] = await Promise.all([
+                resolveEmbedButtons(body),
+                resolveDownloadLinks(body)
+            ]);
 
-            var streams = await Promise.all(buttons.map(async function (btn) {
-                try {
-                    var ajaxRes = await http_post(
-                        manifest.baseUrl + '/wp-admin/admin-ajax.php',
-                        AJAX_HEADERS,
-                        'action=player_ajax&post=' + btn.post + '&nume=' + encodeURIComponent(btn.nume) + '&type=' + encodeURIComponent(btn.type)
-                    );
-                    var embedContent = ajaxRes.body;
-                    try {
-                        var parsed = typeof ajaxRes.body === 'string' ? JSON.parse(ajaxRes.body) : ajaxRes.body;
-                        if (parsed.embed) embedContent = parsed.embed;
-                    } catch (_) {}
+            var flat = [...(embedStreams || []), ...(dlStreams || [])];
+            const Q = ['2160p', '1080p', '720p', '480p', '360p'];
 
-                    var srcMatch = embedContent.match(/src=["']([^"']+)["']/i);
-                    if (!srcMatch) return null;
-                    return resolveStream(srcMatch[1].replace(/&amp;/g, '&'), btn.label);
-                } catch (_) { return null; }
-            }));
+            flat.sort((a, b) => {
+                const parse = src => {
+                    const q = (src || '').match(/2160p|1080p|720p|480p|360p/i)?.[0] || '';
+                    const idx = Q.indexOf(q.toLowerCase());
+                    return { 
+                        server: (src || '').replace(q, '').trim().toLowerCase(), 
+                        qIndex: idx === -1 ? 99 : idx 
+                    };
+                };
 
-            var flat = [];
-            streams.forEach(function (r) {
-                if (!r) return;
-                if (Array.isArray(r)) flat.push.apply(flat, r);
-                else flat.push(r);
+                const valA = parse(a.source);
+                const valB = parse(b.source);
+
+                return valA.server.localeCompare(valB.server) || (valA.qIndex - valB.qIndex);
             });
-
+            
             if (!flat.length) return cb({ success: false, error: 'No playable streams found.' });
             cb({ success: true, data: flat });
         } catch (e) { cb({ success: false, error: String(e) }); }
-    }
-
-    async function resolveStream(iframeUrl, label) {
-        if (iframeUrl.startsWith('/embed/')) iframeUrl = 'https://filedon.co' + iframeUrl;
-
-        if (iframeUrl.includes('filedon.co/embed/')) {
-            var videoUrl = await resolveFiledon(iframeUrl);
-            if (!videoUrl) return null;
-            return new StreamResult({ url: videoUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://filedon.co/' } });
-        }
-
-        if (iframeUrl.includes('api.wibufile.com/embed/')) {
-            var res = await http_get(iframeUrl, { 'Referer': manifest.baseUrl + '/', 'User-Agent': BASE_HEADERS['User-Agent'] });
-            var sourcesMatch = res.body.match(/sources:\s*(\[.*?\])/s);
-            if (!sourcesMatch) return null;
-            try {
-                var sources = JSON.parse(sourcesMatch[1].replace(/\\\//g, '/'));
-                if (!sources.length) return null;
-                return sources.map(function(s) {
-                    return new StreamResult({ url: s.file, quality: fixQuality(s.label || label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
-                });
-            } catch (_) { return null; }
-        }
-
-        if (iframeUrl.includes('wibufile.com')) {
-            return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
-        }
-
-        return null;
     }
 
     globalThis.getHome    = getHome;
@@ -352,4 +432,4 @@
     globalThis.load       = load;
     globalThis.loadStreams = loadStreams;
 
-})();
+}());
