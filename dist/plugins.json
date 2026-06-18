@@ -1,21 +1,21 @@
 [
   {
-    "packageName": "com.arranoust.animexin",
-    "name": "AnimeXin",
+    "packageName": "com.com.zieniro.anichin",
+    "name": "Anichin",
     "version": 1,
-    "baseUrl": "https://animexin.dev",
-    "description": "AnimeXin - Streaming Donghua with Subtitles",
+    "baseUrl": "https://anichin.cafe",
+    "description": "Anichin - Streaming Donghua with Subtitles",
     "authors": [
-      "arranoust"
+      "zieniro"
     ],
     "languages": [
-      "en"
+      "Id"
     ],
     "categories": [
       "Anime",
       "Movies"
     ],
-    "url": "https://raw.githubusercontent.com/zieniro/sky/main/dist/com.arranoust.animexin.sky"
+    "url": "https://raw.githubusercontent.com/zieniro/sky/main/dist/com.com.zieniro.anichin.sky"
   },
   {
     "packageName": "com.arranoust.anizone",
